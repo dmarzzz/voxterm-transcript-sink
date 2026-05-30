@@ -279,7 +279,7 @@ The live "transcript chunk stream" from the whiteboard. The request body is an o
 
 - The stream MUST begin with a single `StreamHeader` line (§9.3) declaring `session_id`, `author`, `hivemind_id`, and `sink_id`; subsequent lines are chunks with monotonically increasing `seq` starting at 0.
 - A chunk with `"is_final": true` closes the session's stream; the sink then MAY assemble a `Transcript` from the accumulated chunks (server-side assembly, §9.4) or wait for an explicit `POST /v1/transcript`.
-- Acknowledgement: the sink streams back `application/x-ndjson` ack lines `{ "ack_seq": n, "stored": true }` so a client can resume. On reconnect the client queries the high-water mark (`X-Sink-Seq` on a `HEAD`/`GET /v1/transcript/{session→id}/chunks?since_seq=`) and resumes at the next `seq`. Chunks are idempotent by `(session_id, author, seq)`.
+- Acknowledgement: the sink streams back `application/x-ndjson` ack lines `{ "ack_seq": n, "stored": true }` so a client can resume. On reconnect the client MUST resume from an authenticated high-water source: the signed ack body (`ack_seq`) from a completed stream response, or the signed `/v1/transcript/{id}/chunks?since_seq=` chunk log after the transcript exists. `X-Sink-Seq` is an unauthenticated response header and MUST be treated only as a hint. Chunks are idempotent by `(session_id, author, seq)`.
 - Backpressure: the sink MAY apply flow control; clients MUST tolerate slow acks and MUST NOT drop unacked chunks.
 - WebSocket transport at `GET /v1/transcript/ws` (upgrade) is an OPTIONAL alternative carrying the same `StreamHeader` + chunk frames; NDJSON-over-POST is the REQUIRED baseline because it traverses the gateway with no special support.
 
@@ -716,7 +716,7 @@ class SinkClient:
       "mrtd":  "<hex sha384>",
       "rtmr0": "<hex>", "rtmr1": "<hex>", "rtmr2": "<hex>" }
   ],
-  "reproducible_build": "https://github.com/<org>/voxterm-transcript-sink/.../REPRODUCE.md",
+  "reproducible_build": "https://github.com/<org>/voxterm-transcript-sink/.../docs/REPRODUCE.md",
   "kms": { "root_pubkey": "<hex|null>", "allowed_compose_hashes": ["<hex>"] }
 }
 ```

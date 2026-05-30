@@ -20,22 +20,23 @@ This is the answer to the relay-operator question that does not reintroduce a co
 
 ## authenticated, both directions
 
-Membership in a private hivemind is possession of the shared `hivemind_key` plus a registered author pubkey. The sink enforces both:
+The v1 protocol is designed around two checks: clients authenticate the sink by verifying TEE attestation, and the sink can verify author signatures on submitted transcript objects.
 
-- **The sink authenticates writers.** Every entry is signed with the author's ed25519 key. The sink verifies the signature and the author's membership before it accepts or relays an entry. No valid signature, no admission.
-- **Writers authenticate the sink.** Before any private group-key material crosses the channel, the client checks the enclave's remote attestation. A node that cannot prove it is the expected code running in a genuine TEE never receives the key.
+This repository currently contains a proof-of-concept sink, not the final membership system:
+
+- **Writers authenticate the sink.** Before a client pushes to a TEE sink, it verifies the enclave's remote attestation and binds responses to the attested `sink_sig` key.
+- **Author signatures are optional in v1.** If a chunk or transcript carries an ed25519 `signature`, the PoC verifies it against `author`. If it is absent, the PoC accepts the write, matching the v1 spec. Required signatures and registered author membership are roadmap work.
 
 ## what it stores
 
-It stores the hivemind entry model as published, nothing decoded:
+The PoC stores the v1 `Transcript` and `TranscriptChunk` envelopes as it receives them:
 
-- signed with the author's ed25519 key
-- content-addressed by BLAKE3 over canonical bytes
-- payloads encrypted with the group's AES-256-GCM key for a private hivemind
+- transcripts are content-addressed by BLAKE3 over JCS canonical bytes
+- chunks are retained by `(session_id, author, seq)`
+- optional author signatures are verified when present
+- payload encryption is represented by the `encryption` field but is not implemented by the sink itself
 
-For a private hivemind the sink only ever holds opaque ciphertext. It can index by `hivemind_id`, author, tags, and time range from the cleartext envelope, and serve backfill, without the group key. For a public hivemind payloads are unencrypted but still signed, and the sink verifies signatures the same way.
-
-Immutability and tombstones follow the protocol: entries are append-only, edits are new entries with `parent_ids` set, deletions are tombstones the sink respects in its views.
+In v1, confidentiality comes from the verified TEE boundary and sealed deployment storage, not from end-to-end encrypted payloads. End-to-end encryption, registered membership, tombstones, and full Hivemind mesh reconciliation are deferred roadmap items.
 
 ## relationship to VoxTerm
 
@@ -59,6 +60,8 @@ This repo is spec-first. Someone else ships the implementation against a frozen 
 
 - [`specs/v1/voxterm-sink-protocol.md`](specs/v1/voxterm-sink-protocol.md) is the normative protocol, version `1.0.0-draft.1`, wire identifier `voxterm-sink/1`. It defines the attestation procedure ("verify it's a TEE"), the data model, the `/auth` and `/transcript` APIs, the cohort/coordinator auth lattice, and the roadmap.
 - [`openapi.yaml`](openapi.yaml) is the machine-readable API description. The prose spec wins on any divergence.
+
+For the reference implementation: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) covers running the PoC, the dstack simulator, attestation modes, and the deliberate PoC cuts; [`docs/REPRODUCE.md`](docs/REPRODUCE.md) is the per-release reproducible-build and measurement-pinning procedure.
 
 Read it in that order. The short version of the v1 design:
 

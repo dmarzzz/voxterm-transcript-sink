@@ -1,0 +1,31 @@
+# Production-shaped compose for deploying voxterm-data-sink into a dstack CVM.
+#
+# dstack-vmm parses this (wrapped as app-compose.json) and boots it inside a TD.
+# The bind-mount of /var/run/dstack.sock is REQUIRED — it is how the container
+# reaches the dstack guest agent for get_key (signing identity, spec §5.2) and
+# get_quote (attestation, §5.4). compose-hash is computed by dstack over the
+# app-compose.json wrapping this file; pin it in measurements.json per release.
+version: "3"
+services:
+  voxterm-data-sink:
+    # For reproducible deployment, reference an immutable digest rather than a
+    # mutable tag (spec §6.3). Build + push, then set SINK_IMAGE to the digest:
+    #   SINK_IMAGE=ghcr.io/<org>/voxterm-data-sink@sha256:<digest> docker compose up
+    # `build: .` is for local iteration only — pin the digest for any pinned cohort.
+    image: ${SINK_IMAGE:-voxterm-data-sink:0.1.0}
+    build: .
+    restart: always
+    environment:
+      # Set a real read secret in production (spec §8.3). Default 1234 warns.
+      - VOXTERM_SINK_READ_SECRET=${VOXTERM_SINK_READ_SECRET:-1234}
+      - VOXTERM_SINK_ATTEST=dstack
+      - VOXTERM_SINK_SNAPSHOT=/data/sink-snapshot.json
+    volumes:
+      # REQUIRED: dstack guest-agent socket (get_key / get_quote / info).
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - sink-data:/data
+    ports:
+      # dstack-gateway maps <appid>[-port].<base_domain> to this port.
+      - "8723:8723"
+volumes:
+  sink-data:

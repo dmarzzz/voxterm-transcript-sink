@@ -1,0 +1,21 @@
+{
+  "_comment": "TEMPLATE (spec Appendix B). The PLACEHOLDER values below MUST be replaced with real values produced by an actual dstack/TDX build at release time — see REPRODUCE.md. A pinned client (spec §6.3) checks MRTD/RTMR0..2 against an entry in dstack_base_images and the RTMR3 compose-hash against compose_hash. Do NOT ship this file with placeholders to a pinned cohort.",
+  "release": "voxterm-data-sink v0.1.0 (PoC — UNRELEASED, placeholders)",
+  "wire": "voxterm-sink/1",
+  "compose_hash": "<FILL: sha256 of the app-compose.json wrapping docker-compose.yaml>",
+  "image": "<FILL: ghcr.io/<org>/voxterm-data-sink@sha256:...>",
+  "dstack_base_images": [
+    {
+      "name": "<FILL: dstack base image, e.g. dstack-0.x.y>",
+      "mrtd": "<FILL: hex sha384>",
+      "rtmr0": "<FILL: hex sha384>",
+      "rtmr1": "<FILL: hex sha384>",
+      "rtmr2": "<FILL: hex sha384>"
+    }
+  ],
+  "reproducible_build": "https://github.com/dmarzzz/voxterm-transcript-sink/blob/main/REPRODUCE.md",
+  "kms": {
+    "root_pubkey": "<FILL or null>",
+    "allowed_compose_hashes": ["<FILL: compose_hash>"]
+  }
+}
