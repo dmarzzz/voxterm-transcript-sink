@@ -53,6 +53,26 @@ Immutability and tombstones follow the protocol: entries are append-only, edits 
 
 Sources are pluggable, hivemind is the destination, and this is one durable node on that destination. It does not replace any peer's local copy. It is the copy that is always reachable.
 
+## the spec
+
+This repo is spec-first. Someone else ships the implementation against a frozen wire contract.
+
+- [`specs/v1/voxterm-sink-protocol.md`](specs/v1/voxterm-sink-protocol.md) is the normative protocol, version `1.0.0-draft.1`, wire identifier `voxterm-sink/1`. It defines the attestation procedure ("verify it's a TEE"), the data model, the `/auth` and `/transcript` APIs, the cohort/coordinator auth lattice, and the roadmap.
+- [`openapi.yaml`](openapi.yaml) is the machine-readable API description. The prose spec wins on any divergence.
+
+Read it in that order. The short version of the v1 design:
+
+1. The sink runs in Dstack on Intel TDX. It derives a long-term `sink_sig` identity from its attested app identity and serves a TDX DCAP quote at `GET /v1/attestation`.
+2. A VoxTerm client adds the sink by URL, sends a fresh nonce, verifies the quote against Intel collateral, replays the event log to confirm the running code, checks the quote's `report_data` binds the sink's key (channel binding plus freshness), and only then pushes.
+3. Push is a live `POST /v1/transcript/stream` (NDJSON chunk stream) or a single `POST /v1/transcript` on finalize. Whether you stream live or post once is a client choice; the sink supports both.
+4. Read is `GET /v1/transcript`. v1 read auth is a labeled placeholder: a shared static secret defaulting to `1234`. It is not real auth and the spec says so. The real cohort/coordinator model is defined and deferred.
+
+The data model is additive-only and versioned, so v1 can evolve without breaking old clients or old data.
+
+## what is deferred
+
+Per the spec roadmap (§12): author-signed writes, real read auth replacing `1234`, coordinator enforcement, end-to-end payload encryption under a hivemind group key, tombstones, and the full Hivemind mesh bridge. v1 ships the attested always-on sink with the easy auth; the hard halves are flagged, not hidden.
+
 ## status
 
-Early. This README is the design intent, not a shipped build. The hivemind protocol it targets is itself still in scoping; see `docs/hivemind-scoping.md` in the VoxTerm repo for the entry model, membership rules, and open questions this sink is meant to fit into.
+Draft. The spec is open for contribution (see §13 for the process). The Hivemind protocol it targets is itself still in scoping; see `docs/hivemind-scoping.md` in the VoxTerm repo for the entry model, membership rules, and open questions this sink fits into.

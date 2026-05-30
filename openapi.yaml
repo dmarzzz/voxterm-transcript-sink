@@ -1,0 +1,398 @@
+openapi: 3.1.0
+info:
+  title: VoxTerm Sink Protocol
+  version: 1.0.0-draft.1
+  description: >
+    Wire API for an attested, always-on transcript data sink for VoxTerm Hivemind
+    mode, running inside a TEE (Dstack on Intel TDX). Normative prose lives in
+    specs/v1/voxterm-sink-protocol.md; where this file and the prose diverge, the
+    prose wins. v1 read auth is a shared static placeholder secret ("1234"); it is
+    not real authentication.
+  license:
+    name: see repository
+
+servers:
+  - url: https://{appId}.{gatewayDomain}/v1
+    description: Dstack gateway public endpoint
+    variables:
+      appId: { default: "your-app-id" }
+      gatewayDomain: { default: "dstack.example" }
+
+tags:
+  - { name: meta, description: capabilities and liveness }
+  - { name: attestation, description: verify it's a TEE }
+  - { name: auth, description: token exchange }
+  - { name: transcript, description: push and fetch }
+
+security:
+  - bearer: []
+
+paths:
+  /info:
+    get:
+      tags: [meta]
+      summary: Sink capabilities, limits, identity, governance
+      security: []
+      responses:
+        "200":
+          description: ok
+          content: { application/json: { schema: { $ref: "#/components/schemas/Info" } } }
+
+  /health:
+    get:
+      tags: [meta]
+      summary: Liveness
+      security: []
+      responses:
+        "200": { description: ok }
+
+  /attestation:
+    get:
+      tags: [attestation]
+      summary: TEE attestation bundle (TDX DCAP quote + event log + bound keys)
+      security: []
+      parameters:
+        - name: nonce
+          in: query
+          required: false
+          description: 32-byte hex client nonce for freshness; echoed into report_data.
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+      responses:
+        "200":
+          description: attestation bundle
+          content: { application/json: { schema: { $ref: "#/components/schemas/AttestationBundle" } } }
+        "503":
+          description: guest agent unreachable
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /auth:
+    post:
+      tags: [auth]
+      summary: Exchange a secret for a bearer token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier, secret]
+              properties:
+                tier: { type: string, enum: [cohort, coordinator] }
+                secret: { type: string, description: "v1 read placeholder default '1234'" }
+      responses:
+        "200":
+          description: token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, tier, expires_at]
+                properties:
+                  token: { type: string }
+                  tier: { type: string, enum: [public, cohort, coordinator] }
+                  expires_at: { type: string, format: date-time }
+        "401":
+          description: bad secret
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /transcript:
+    post:
+      tags: [transcript]
+      summary: Push one finalized transcript
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Transcript" } } }
+      responses:
+        "201":
+          description: stored
+          content: { application/json: { schema: { $ref: "#/components/schemas/StoreResult" } } }
+        "200":
+          description: already stored (idempotent re-post)
+          content: { application/json: { schema: { $ref: "#/components/schemas/StoreResult" } } }
+        "409":
+          description: id does not match content
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "413":
+          description: too large
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    get:
+      tags: [transcript]
+      summary: List / query transcript metadata
+      parameters:
+        - { name: hivemind_id, in: query, schema: { type: string } }
+        - { name: session_id, in: query, schema: { type: string } }
+        - { name: author, in: query, schema: { type: string } }
+        - { name: content_type, in: query, schema: { type: string, enum: [transcript, readout, summary, note] } }
+        - { name: tag, in: query, schema: { type: array, items: { type: string } }, style: form, explode: true }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { name: until, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: page of metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/TranscriptMeta" } }
+                  next_cursor: { type: [string, "null"] }
+        "401":
+          description: missing/invalid read token
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /transcript/stream:
+    post:
+      tags: [transcript]
+      summary: Push a live transcript chunk stream (NDJSON)
+      description: >
+        Request body is application/x-ndjson: first line a StreamHeader, then one
+        TranscriptChunk per line. Response is application/x-ndjson ack lines.
+        A chunk with is_final=true closes the session stream.
+      requestBody:
+        required: true
+        content:
+          application/x-ndjson:
+            schema:
+              description: StreamHeader line followed by TranscriptChunk lines
+              oneOf:
+                - { $ref: "#/components/schemas/StreamHeader" }
+                - { $ref: "#/components/schemas/TranscriptChunk" }
+      responses:
+        "200":
+          description: NDJSON ack stream
+          content:
+            application/x-ndjson:
+              schema:
+                type: object
+                properties:
+                  ack_seq: { type: integer }
+                  stored: { type: boolean }
+
+  /transcript/{id}:
+    get:
+      tags: [transcript]
+      summary: Fetch one full transcript
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: transcript
+          content: { application/json: { schema: { $ref: "#/components/schemas/Transcript" } } }
+        "404":
+          description: not found
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /transcript/{id}/chunks:
+    get:
+      tags: [transcript]
+      summary: Fetch the underlying chunk log (NDJSON)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: since_seq, in: query, schema: { type: integer, default: -1 } }
+      responses:
+        "200":
+          description: NDJSON of TranscriptChunk with seq > since_seq
+          content:
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/TranscriptChunk" }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: Token from POST /auth. v1 read tier uses the '1234' placeholder.
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [unsupported_protocol, unauthorized, forbidden, not_found,
+                     bad_request, schema_mismatch, id_mismatch, payload_too_large,
+                     rate_limited, attestation_unavailable, internal]
+            message: { type: string }
+            detail: { type: object }
+
+    Speaker:
+      type: object
+      required: [local_id]
+      properties:
+        local_id: { type: integer }
+        label: { type: [string, "null"] }
+
+    TranscriptChunk:
+      type: object
+      required: [schema_version, sink_id, hivemind_id, session_id, author, seq,
+                 created_at, is_final, text, t_start, t_end, speaker]
+      properties:
+        schema_version: { type: string, const: "1" }
+        sink_id: { type: string }
+        hivemind_id: { type: string }
+        session_id: { type: string }
+        author: { type: string, description: hex ed25519 pubkey }
+        seq: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        is_final: { type: boolean }
+        text: { type: string }
+        t_start: { type: number }
+        t_end: { type: number }
+        speaker: { $ref: "#/components/schemas/Speaker" }
+        lang: { type: [string, "null"] }
+        confidence: { type: [number, "null"] }
+        revises_seq: { type: [integer, "null"] }
+        tags: { type: array, items: { type: string } }
+        signature: { type: [string, "null"], description: "ed25519:<hex>" }
+
+    Segment:
+      type: object
+      required: [speaker, text, t_start, t_end]
+      properties:
+        speaker: { $ref: "#/components/schemas/Speaker" }
+        text: { type: string }
+        t_start: { type: number }
+        t_end: { type: number }
+        lang: { type: [string, "null"] }
+        confidence: { type: [number, "null"] }
+
+    Encryption:
+      type: object
+      required: [scheme, kid, nonce]
+      properties:
+        scheme: { type: string, const: aes-256-gcm }
+        kid: { type: string }
+        nonce: { type: string }
+        aad: { type: [string, "null"] }
+
+    Transcript:
+      type: object
+      required: [schema_version, id, sink_id, hivemind_id, session_id, author,
+                 content_type, created_at, segments]
+      properties:
+        schema_version: { type: string, const: "1" }
+        id: { type: string, description: blake3(JCS(self minus id and signature)) }
+        sink_id: { type: string }
+        hivemind_id: { type: string }
+        session_id: { type: string }
+        author: { type: string }
+        content_type: { type: string, enum: [transcript, readout, summary, note] }
+        created_at: { type: string, format: date-time }
+        title: { type: [string, "null"] }
+        tags: { type: array, items: { type: string } }
+        parent_ids: { type: array, items: { type: string } }
+        segments: { type: array, items: { $ref: "#/components/schemas/Segment" } }
+        markdown: { type: [string, "null"] }
+        source: { type: object }
+        encryption: { oneOf: [ { $ref: "#/components/schemas/Encryption" }, { type: "null" } ] }
+        signature: { type: [string, "null"] }
+
+    StreamHeader:
+      type: object
+      required: [schema_version, type, sink_id, hivemind_id, session_id, author, started_at]
+      properties:
+        schema_version: { type: string, const: "1" }
+        type: { type: string, const: stream_header }
+        sink_id: { type: string }
+        hivemind_id: { type: string }
+        session_id: { type: string }
+        author: { type: string }
+        started_at: { type: string, format: date-time }
+        expected_final: { type: boolean }
+        client: { type: object }
+
+    TranscriptMeta:
+      type: object
+      properties:
+        id: { type: string }
+        session_id: { type: string }
+        author: { type: string }
+        content_type: { type: string }
+        title: { type: [string, "null"] }
+        tags: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+        stored_at: { type: string, format: date-time }
+        bytes: { type: integer }
+        chunk_count: { type: integer }
+        url: { type: string }
+
+    StoreResult:
+      type: object
+      required: [id, url, stored_at]
+      properties:
+        id: { type: string }
+        url: { type: string }
+        stored_at: { type: string, format: date-time }
+
+    AttestationBundle:
+      type: object
+      required: [schema_version, wire, quote, event_log, sink_sig_pubkey, app_id, compose_hash, produced_at]
+      properties:
+        schema_version: { type: string, const: "1" }
+        wire: { type: string, const: voxterm-sink/1 }
+        quote: { type: string, description: hex TDX DCAP quote }
+        event_log: { type: string, description: JSON event log for RTMR replay }
+        report_data_construction:
+          type: object
+          properties:
+            algo: { type: string, const: blake3-512 }
+            domain: { type: string, const: voxterm-sink/1 }
+            fields: { type: array, items: { type: string } }
+        sink_sig_pubkey: { type: string }
+        sink_dh_pubkey: { type: [string, "null"] }
+        nonce: { type: [string, "null"] }
+        app_id: { type: string }
+        instance_id: { type: string }
+        compose_hash: { type: string }
+        kms:
+          type: object
+          properties:
+            root_pubkey: { type: [string, "null"] }
+            signature_chain: { type: array, items: { type: string } }
+        produced_at: { type: string, format: date-time }
+
+    Info:
+      type: object
+      properties:
+        wire: { type: string, const: voxterm-sink/1 }
+        spec_version: { type: string }
+        sink_id: { type: string }
+        sink_sig_pubkey: { type: string }
+        sink_dh_pubkey: { type: [string, "null"] }
+        app_id: { type: string }
+        compose_hash: { type: string }
+        hiveminds: { type: array, items: { type: string } }
+        limits:
+          type: object
+          properties:
+            max_chunk_bytes: { type: integer }
+            max_transcript_bytes: { type: integer }
+            rate_per_min: { type: integer }
+        retention:
+          type: object
+          properties:
+            policy: { type: string, enum: [keep, ttl] }
+            ttl_days: { type: [integer, "null"] }
+        auth:
+          type: object
+          properties:
+            read: { type: string }
+            write: { type: string }
+            levels: { type: array, items: { type: string } }
+        governance:
+          type: object
+          properties:
+            kms_root_pubkey: { type: [string, "null"] }
+            allowed_compose_hashes_ref: { type: [string, "null"] }
+        build:
+          type: object
+          properties:
+            release: { type: string }
+            measurements_ref: { type: string }
