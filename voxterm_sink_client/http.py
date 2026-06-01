@@ -35,6 +35,14 @@ class HTTPTransport:
         req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
-                return HTTPResult(resp.status, dict(resp.headers.items()), resp.read())
+                return HTTPResult(
+                    resp.status,
+                    {key.lower(): value for key, value in resp.headers.items()},
+                    resp.read(),
+                )
         except urllib.error.HTTPError as exc:
-            return HTTPResult(exc.code, dict(exc.headers.items()), exc.read())
+            return HTTPResult(
+                exc.code,
+                {key.lower(): value for key, value in exc.headers.items()},
+                exc.read(),
+            )

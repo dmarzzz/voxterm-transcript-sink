@@ -10,7 +10,7 @@ from voxterm_transcript_sink import WIRE
 from .http import HTTPResult, HTTPTransport
 from .identity import AuthorIdentity
 from .transcript import build_transcript
-from .verify import SIGNATURE_HEADER, verify_response_signature
+from .verify import SIGNATURE_HEADER_KEY, verify_response_signature
 
 
 @dataclass
@@ -84,7 +84,7 @@ def _handle_upload_response(
     except json.JSONDecodeError:
         raise ValueError(f"HTTP {resp.status}: non-JSON response") from None
     if resp.status in (200, 201):
-        if not verify_response_signature(body, resp.headers.get(SIGNATURE_HEADER), sink_pubkey):
+        if not verify_response_signature(body, resp.headers.get(SIGNATURE_HEADER_KEY), sink_pubkey):
             raise ValueError("invalid upload response signature")
         status = "created" if resp.status == 201 else "already_stored"
         returned_id = body.get("id")

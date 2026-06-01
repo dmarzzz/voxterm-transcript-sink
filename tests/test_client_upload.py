@@ -17,7 +17,12 @@ from voxterm_sink_client.identity import load_or_create_author
 from voxterm_sink_client.transcript import build_transcript, parse_markdown
 from voxterm_sink_client.trust import TrustStore
 from voxterm_sink_client.upload import collect_markdown_paths, upload_files
-from voxterm_sink_client.verify import VerificationError, normalize_sink_url, verify_sink
+from voxterm_sink_client.verify import (
+    PhalaCloudVerifier,
+    VerificationError,
+    normalize_sink_url,
+    verify_sink,
+)
 
 HIVEMIND = "11111111-1111-1111-1111-111111111111"
 
@@ -170,6 +175,7 @@ class FakeSinkTransport:
         sink_dh_pubkey: str | None = None,
         tamper_event_payload: bool = False,
         omit_metadata_payload: bool = False,
+        app_id_override: str | None = None,
     ):
         self.identity = identity or SinkIdentity.from_seed("client-test")
         self.provider = DevQuoteProvider("client-test")
@@ -179,12 +185,15 @@ class FakeSinkTransport:
         self.sink_dh_pubkey = sink_dh_pubkey
         self.tamper_event_payload = tamper_event_payload
         self.omit_metadata_payload = omit_metadata_payload
+        self.app_id_override = app_id_override
 
     def get(self, url: str, headers: dict[str, str] | None = None) -> HTTPResult:
         if "/v1/attestation?nonce=" in url:
             nonce = bytes.fromhex(url.rsplit("nonce=", 1)[1])
             body = self.provider.get_bundle(self.identity, nonce)
             body["sink_dh_pubkey"] = self.sink_dh_pubkey
+            if self.app_id_override is not None:
+                body["app_id"] = self.app_id_override
             if self.malformed_event_log:
                 body["event_log"] = "not-json"
             else:
@@ -199,6 +208,8 @@ class FakeSinkTransport:
             return self._signed_response(200, body)
         if url.endswith("/v1/info"):
             att = self.provider.get_bundle(self.identity, b"\x00" * 32)
+            if self.app_id_override is not None:
+                att["app_id"] = self.app_id_override
             body = {
                 "wire": WIRE,
                 "spec_version": "1.0.0-draft.1",
@@ -227,7 +238,7 @@ class FakeSinkTransport:
         digest = blake3.blake3(canonical_bytes(body)).digest()
         return HTTPResult(
             status,
-            {"X-Sink-Signature": self.identity.sign(digest)},
+            {"x-sink-signature": self.identity.sign(digest)},
             raw,
         )
 
@@ -307,6 +318,24 @@ def test_verify_sink_tofu_changed_key_rejected(tmp_path):
         )
 
 
+def test_verify_sink_tofu_changed_app_id_rejected(tmp_path):
+    trust = TrustStore(tmp_path / "trust.json")
+    identity = SinkIdentity.from_seed("same-key")
+    verify_sink(
+        "https://sink.test",
+        transport=FakeSinkTransport(identity, app_id_override="aa" * 20),
+        verifier=FakeVerifier(),
+        trust_store=trust,
+    )
+    with pytest.raises(ValueError, match="different app_id"):
+        verify_sink(
+            "https://sink.test",
+            transport=FakeSinkTransport(identity, app_id_override="bb" * 20),
+            verifier=FakeVerifier(),
+            trust_store=trust,
+        )
+
+
 def test_verify_sink_rejects_malformed_event_log(tmp_path):
     with pytest.raises(VerificationError, match="event_log is malformed"):
         verify_sink(
@@ -371,6 +400,18 @@ def test_verify_sink_binds_non_null_dh_pubkey(tmp_path):
 
     assert sink_url == "https://sink.test"
     assert verified["sink_sig_pubkey"]
+
+
+class RecordingTransport:
+    def post_json(self, url, payload, headers=None):
+        return HTTPResult(200, {}, json.dumps({"success": True}).encode())
+
+
+def test_phala_verifier_missing_quote_is_verification_error():
+    verifier = PhalaCloudVerifier(RecordingTransport())
+
+    with pytest.raises(VerificationError, match="missing quote"):
+        verifier.verify_attestation({})
 
 
 def test_trust_reset_removes_last_url_and_sink(tmp_path):

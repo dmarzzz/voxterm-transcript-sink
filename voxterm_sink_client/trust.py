@@ -65,6 +65,8 @@ class TrustStore:
             }
             self.data["sinks"][pubkey] = record
         else:
+            if record.get("app_id", "") != verified.get("app_id", ""):
+                raise ValueError("trusted sink presented a different app_id")
             if record.get("compose_hash", "") != verified.get("compose_hash", ""):
                 raise ValueError("trusted sink presented a different compose_hash")
             for key in ("mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"):

@@ -18,6 +18,7 @@ from .http import HTTPTransport
 from .trust import TrustStore
 
 SIGNATURE_HEADER = "X-Sink-Signature"
+SIGNATURE_HEADER_KEY = SIGNATURE_HEADER.lower()
 
 
 class VerificationError(RuntimeError):
@@ -66,7 +67,8 @@ class PhalaCloudVerifier:
         self.transport = transport or HTTPTransport()
 
     def verify_attestation(self, bundle: dict[str, Any]) -> dict[str, Any]:
-        result = self.transport.post_json(self.url, {"hex": bundle["quote"]})
+        quote = _require_hex(bundle.get("quote"), None, "quote")
+        result = self.transport.post_json(self.url, {"hex": quote})
         if result.status < 200 or result.status >= 300:
             raise VerificationError(f"Phala verifier returned HTTP {result.status}")
         return result.json()
@@ -95,7 +97,7 @@ def verify_sink(
 
     verified = _verify_attestation_bundle(bundle, nonce, verifier)
     if not verify_response_signature(
-        bundle, att.headers.get(SIGNATURE_HEADER), verified["sink_sig_pubkey"]
+        bundle, att.headers.get(SIGNATURE_HEADER_KEY), verified["sink_sig_pubkey"]
     ):
         raise VerificationError("invalid attestation response signature")
 
@@ -104,7 +106,7 @@ def verify_sink(
         raise VerificationError(f"info failed with HTTP {info_resp.status}")
     info = info_resp.json()
     if not verify_response_signature(
-        info, info_resp.headers.get(SIGNATURE_HEADER), verified["sink_sig_pubkey"]
+        info, info_resp.headers.get(SIGNATURE_HEADER_KEY), verified["sink_sig_pubkey"]
     ):
         raise VerificationError("invalid info response signature")
     if info.get("sink_sig_pubkey") != verified["sink_sig_pubkey"]:
