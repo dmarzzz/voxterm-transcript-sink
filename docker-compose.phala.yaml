@@ -1,15 +1,15 @@
-# Phala Cloud staging deployment for voxterm-data-sink.
+# Phala Cloud PRODUCTION deployment for voxterm-data-sink.
 #
-# Build and push a public Docker Hub image first, then replace the digest below:
-#   docker buildx build --platform linux/amd64 \
-#     -t sh1sh1nk/voxterm-data-sink:v0.1.0-staging.1 --push .
-#   docker buildx imagetools inspect sh1sh1nk/voxterm-data-sink:v0.1.0-staging.1
+# The image is pinned by IMMUTABLE DIGEST from a REPRODUCIBLE build (digest-pinned
+# base + hash-locked deps + SOURCE_DATE_EPOCH; see docs/REPRODUCE.md §3 for the
+# exact command). Rebuilding from this commit reproduces the same digest. Repin
+# only when intentionally releasing.
 #
 # Deploy with Phala CLI and provide VOXTERM_SINK_READ_SECRET as an encrypted
 # environment variable. Do not commit a real secret into this file.
 services:
   voxterm-data-sink:
-    image: sh1sh1nk/voxterm-data-sink@sha256:fe867fdf44163da70e536a2ae85c802fb685e0f3985d031a8fbfc9d2e92a41ee
+    image: sh1sh1nk/voxterm-data-sink@sha256:836bb5f28ffc85b572d096a7b6511353f24a567caea2d3c9d6e6efb43589742d
     restart: always
     environment:
       - VOXTERM_SINK_READ_SECRET=${VOXTERM_SINK_READ_SECRET:?set via phala deploy -e}

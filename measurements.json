@@ -3,7 +3,7 @@
   "release": "voxterm-data-sink v0.1.0 (PoC — UNRELEASED, placeholders)",
   "wire": "voxterm-sink/1",
   "compose_hash": "<FILL: sha256 of the app-compose.json wrapping docker-compose.yaml>",
-  "image": "<FILL: ghcr.io/<org>/voxterm-data-sink@sha256:...>",
+  "image": "docker.io/sh1sh1nk/voxterm-data-sink@sha256:836bb5f28ffc85b572d096a7b6511353f24a567caea2d3c9d6e6efb43589742d",
   "dstack_base_images": [
     {
       "name": "<FILL: dstack base image, e.g. dstack-0.x.y>",

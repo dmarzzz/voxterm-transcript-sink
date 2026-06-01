@@ -17,6 +17,12 @@ from voxterm_sink_client.identity import load_or_create_author
 from voxterm_sink_client.transcript import build_transcript, parse_markdown
 from voxterm_sink_client.trust import TrustStore
 from voxterm_sink_client.upload import collect_markdown_paths, upload_files
+from voxterm_sink_client.measurements import (
+    POLICY_PINNED,
+    MeasurementError,
+    ReleaseMeasurements,
+    load_release,
+)
 from voxterm_sink_client.verify import (
     PhalaCloudVerifier,
     VerificationError,
@@ -475,3 +481,129 @@ def test_upload_non_json_error_preserves_http_context(tmp_path):
 
     assert uploaded == []
     assert failed[0].error == "HTTP 400: non-JSON response"
+
+
+# --- pinned measurement policy (spec §6.3) ---------------------------------
+
+# The FakeVerifier above reports fixed base-image registers for every quote.
+FAKE_MRTD = "01" * 48
+FAKE_RTMR0 = "02" * 48
+FAKE_RTMR1 = "03" * 48
+FAKE_RTMR2 = "04" * 48
+
+
+def _release_for(compose_hash: str, *, mrtd: str = FAKE_MRTD) -> ReleaseMeasurements:
+    return ReleaseMeasurements.from_dict(
+        {
+            "release": "test-release v0",
+            "compose_hash": compose_hash,
+            "image": "docker.io/example/sink@sha256:" + "ab" * 32,
+            "dstack_base_images": [
+                {
+                    "name": "dstack-test",
+                    "mrtd": mrtd,
+                    "rtmr0": FAKE_RTMR0,
+                    "rtmr1": FAKE_RTMR1,
+                    "rtmr2": FAKE_RTMR2,
+                }
+            ],
+        }
+    )
+
+
+def _live_compose_hash(tmp_path) -> tuple[FakeSinkTransport, str]:
+    """Run one TOFU pass to learn the compose_hash the fake sink presents."""
+    transport = FakeSinkTransport()
+    _, verified, _ = verify_sink(
+        "https://sink.test",
+        transport=transport,
+        verifier=FakeVerifier(),
+        trust_store=TrustStore(tmp_path / "tofu.json"),
+    )
+    return transport, verified["compose_hash"]
+
+
+def test_verify_sink_pinned_accepts_matching_release(tmp_path):
+    transport, compose_hash = _live_compose_hash(tmp_path)
+    release = _release_for(compose_hash)
+
+    _, verified, _ = verify_sink(
+        "https://sink.test",
+        transport=transport,
+        verifier=FakeVerifier(),
+        trust_store=TrustStore(tmp_path / "pinned.json"),
+        policy=POLICY_PINNED,
+        release=release,
+    )
+
+    assert verified["policy"] == POLICY_PINNED
+    assert verified["pinned"] == {"release": "test-release v0", "base_image": "dstack-test"}
+
+
+def test_verify_sink_pinned_rejects_wrong_compose_hash(tmp_path):
+    transport, _ = _live_compose_hash(tmp_path)
+    release = _release_for("ee" * 32)  # not the sink's compose_hash
+
+    with pytest.raises(VerificationError, match="compose_hash does not match"):
+        verify_sink(
+            "https://sink.test",
+            transport=transport,
+            verifier=FakeVerifier(),
+            trust_store=TrustStore(tmp_path / "pinned.json"),
+            policy=POLICY_PINNED,
+            release=release,
+        )
+
+
+def test_verify_sink_pinned_rejects_wrong_base_image(tmp_path):
+    transport, compose_hash = _live_compose_hash(tmp_path)
+    release = _release_for(compose_hash, mrtd="ff" * 48)  # right compose, wrong MRTD
+
+    with pytest.raises(VerificationError, match="match no pinned"):
+        verify_sink(
+            "https://sink.test",
+            transport=transport,
+            verifier=FakeVerifier(),
+            trust_store=TrustStore(tmp_path / "pinned.json"),
+            policy=POLICY_PINNED,
+            release=release,
+        )
+
+
+def test_verify_sink_pinned_requires_release(tmp_path):
+    with pytest.raises(VerificationError, match="requires a release"):
+        verify_sink(
+            "https://sink.test",
+            transport=FakeSinkTransport(),
+            verifier=FakeVerifier(),
+            trust_store=TrustStore(tmp_path / "pinned.json"),
+            policy=POLICY_PINNED,
+        )
+
+
+def test_release_measurements_rejects_placeholder_template():
+    repo_root = Path(__file__).resolve().parent.parent
+    template = json.loads((repo_root / "measurements.json").read_text(encoding="utf-8"))
+    with pytest.raises(MeasurementError):
+        ReleaseMeasurements.from_dict(template)
+
+
+def test_release_measurements_check_round_trip():
+    release = _release_for("cd" * 32)
+    matched = release.check(
+        compose_hash="0x" + "cd" * 32,  # accepts 0x prefix + case-insensitive
+        measurements={
+            "mrtd": FAKE_MRTD,
+            "rtmr0": FAKE_RTMR0,
+            "rtmr1": FAKE_RTMR1,
+            "rtmr2": FAKE_RTMR2,
+            "rtmr3": "07" * 48,  # rtmr3 is not pinned here
+        },
+    )
+    assert matched.name == "dstack-test"
+
+
+def test_load_release_without_bundled_manifest_is_actionable():
+    # No measurements.json is packaged inside the client yet (still unreleased).
+    with pytest.raises(MeasurementError, match="--measurements"):
+        load_release(None)
