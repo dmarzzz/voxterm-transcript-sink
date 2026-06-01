@@ -52,9 +52,10 @@ signed by that attested key (`X-Sink-Signature`). Two trust tiers:
 - **Pinned** (`--measurement-policy pinned`) — require the live quote to match a
   published release `measurements.json`, fail closed otherwise.
 
-> The shipped `measurements.json` is a **template with placeholders** until a real TDX
-> build reads the values back from a live quote ([REPRODUCE.md](REPRODUCE.md)). Don't
-> pin a cohort against placeholders; use TOFU until a release manifest is published.
+> The shipped `measurements.json` is the **published release manifest** for the live
+> v0.1.0 prod sink (`voxterm-transcript-sink-prod`), read back from its quote and
+> verified — `--measurement-policy pinned` against it works. Re-pin on any image or
+> compose change ([REPRODUCE.md](REPRODUCE.md)); never ship `<FILL…>` placeholders.
 
 **The operator can't read or forge.** Confidentiality comes from the verified TEE
 boundary plus KMS-sealed storage — the host operator sees ciphertext at rest and cannot

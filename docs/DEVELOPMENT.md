@@ -9,7 +9,7 @@ pluggable attestation.
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                     # 53 hermetic tests
+pytest -q                     # 54 hermetic tests
 ```
 
 ## Running
@@ -101,11 +101,10 @@ under `--require-hashes`, and the image is built deterministically
 (`SOURCE_DATE_EPOCH` into the build env, `pip --no-compile`, `PIP_NO_CACHE_DIR=1`,
 buildx `rewrite-timestamp`) so a clean rebuild from a commit reproduces the same
 digest. See **REPRODUCE.md** for the exact command. The released image digest is
-pinned in `docker-compose.phala.yaml`. What's still pending is the *live*
-half of `measurements.json` (spec Appendix B) — the real `compose_hash` +
-`MRTD/RTMR0..2` can only be read back from an actual dstack/TDX deployment, so
-those fields ship as **placeholders** until a release reads them from the live
-quote.
+pinned in `docker-compose.phala.yaml`. The *live* half of `measurements.json`
+(spec Appendix B) — `compose_hash` + `MRTD/RTMR0..2` — has been read back from the
+live `voxterm-transcript-sink-prod` deployment and is published; re-pin from the
+live quote whenever the image or compose changes.
 
 ## Known limitations (PoC)
 

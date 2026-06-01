@@ -14,7 +14,7 @@ Intel TDX. If you just want to *use* an existing sink, see
 cd voxterm-transcript-sink
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                                            # 53 passing
+pytest -q                                            # 54 passing
 
 VOXTERM_SINK_ATTEST=dev python -m voxterm_transcript_sink   # serves on :8723
 ```
@@ -47,18 +47,18 @@ pytest tests/test_simulator.py -v    # runs only when the env var is set
 
 ## Posture C — real TEE on Phala / dstack TDX
 
-The production sink runs inside a Confidential VM on Intel TDX. The full procedure is
+The production sink runs inside a Confidential VM on Intel TDX. It is **live** as
+`voxterm-transcript-sink-prod` (app-id `737d7cb9…`). The full procedure is
 [PHALA_DEPLOY.md](PHALA_DEPLOY.md); the reproducible-build and measurement-pinning
 procedure is [REPRODUCE.md](REPRODUCE.md). The shape:
 
 - The image is a **reproducibly-built, digest-pinned** artifact referenced from
   `docker-compose.phala.yaml` (`sh1sh1nk/voxterm-data-sink@sha256:836bb5f2…`). A clean
   rebuild from the same commit reproduces the same digest.
-- Current strategy is to **upgrade the existing app in place**
-  (`phala cvms upgrade <app-id> -c docker-compose.phala.yaml -e …`) rather than deploy
-  a new one. Keeping the app-id preserves the `get_key`-derived `sink_sig` identity and
-  the encrypted `/data` volume across upgrades; the `compose_hash` (RTMR3) changes by
-  design, and that new value is what production clients pin.
+- The prod app was created with `phala deploy` (its own app-id ⇒ its own `sink_sig`
+  identity and sealed `/data`). To roll a new build onto an existing app instead —
+  preserving identity + volume — use `phala cvms upgrade <app-id> …`; the
+  `compose_hash` (RTMR3) changes by design and that new value is what clients pin.
 - Set a **real** `VOXTERM_SINK_READ_SECRET` (e.g. `openssl rand -hex 32`) — never the
   `1234` default. In `dstack` mode the sink **fails closed**: if `get_key()` can't
   derive the signing identity at boot, it refuses to start (it never falls back to a
@@ -83,8 +83,9 @@ voxterm-sink-upload verify --sink-url "$BASE_URL"   # TOFU records the measureme
 voxterm-sink-upload trust inspect                   # prints compose_hash + mrtd/rtmr0..2
 ```
 
-Fill those into `measurements.json` (it ships with **placeholders**), publish it, and
-hand clients `--measurement-policy pinned --measurements <file>`. Full steps:
+Fill those into `measurements.json` and publish it, then hand clients
+`--measurement-policy pinned --measurements <file>`. The repo's `measurements.json`
+is already filled for the live v0.1.0 prod sink. Full steps:
 [REPRODUCE.md](REPRODUCE.md) §4–6.
 
 ## Configuration (environment variables)
@@ -110,8 +111,9 @@ This is a proof-of-concept implementation of a frozen spec. Deliberate cuts:
   enforce it. Public TLS terminates at `dstack-gateway`, so the app sees only the
   gateway IP; enforce rate limits / per-IP caps **at the gateway**. Size caps
   (`max_chunk_bytes` / `max_transcript_bytes`) *are* enforced in-app (`413`).
-- **Measurements** — `measurements.json` ships with placeholders until a real TDX
-  build reads back the values. Don't ask a pinned cohort to trust placeholders.
+- **Measurements** — `measurements.json` is filled for the live v0.1.0 prod sink.
+  Re-pin (re-read from the live quote) whenever the image or compose changes; never
+  ship a pinned cohort a manifest with `<FILL…>` placeholders.
 
 The complete list of PoC cuts is in [DEVELOPMENT.md](DEVELOPMENT.md); the hosting
 model and guarantees are in [HOSTING_AND_GUARANTEES.md](HOSTING_AND_GUARANTEES.md).

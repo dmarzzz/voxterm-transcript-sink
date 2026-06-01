@@ -61,9 +61,10 @@ Two trust policies:
     --measurement-policy pinned --measurements ./measurements.json
   ```
 
-  Your sink operator publishes the `measurements.json`. (Note: in this PoC release
-  the manifest still ships with placeholders until a real TDX build fills it in —
-  don't pin against placeholders. See [HOSTING_AND_GUARANTEES.md](HOSTING_AND_GUARANTEES.md).)
+  Your sink operator publishes the `measurements.json`. The repo's
+  `measurements.json` is the published manifest for the v0.1.0 production sink
+  (`voxterm-transcript-sink-prod`); `--measurement-policy pinned` against it is
+  verified working. See [HOSTING_AND_GUARANTEES.md](HOSTING_AND_GUARANTEES.md).
 
 ## 3. Quick upload
 
