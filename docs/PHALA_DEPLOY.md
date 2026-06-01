@@ -10,7 +10,7 @@ encrypted `/data` volume across the upgrade. The `compose_hash` (RTMR3) changes
 by design — that new value is what production clients pin (spec §6.3).
 
 > The image is already built, pushed, and pinned
-> (`sh1sh1nk/voxterm-data-sink@sha256:b9f5c72b…`, see `REPRODUCE.md`). These steps
+> (`sh1sh1nk/voxterm-data-sink@sha256:836bb5f2…`, see `REPRODUCE.md`). These steps
 > need your Phala credentials, so run them yourself.
 
 ## 1. Validate locally
