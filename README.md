@@ -1,23 +1,21 @@
 # voxterm-transcript-sink
 
-An authenticated, always-on data sink for [VoxTerm](https://github.com/dmarzzz/VoxTerm)
-hivemind mode. It runs inside a TEE (Intel TDX, on Phala/dstack), so it can hold a
-group's full transcript history **without ever being able to read it**. You don't
-trust the operator — you verify the enclave.
+The always-on TEE transcript sink for the **shape-rotator** hivemind — a
+[VoxTerm](https://github.com/dmarzzz/VoxTerm) cohort. It runs inside a TEE (Intel
+TDX, on Phala/dstack), so the **operator can't read the cohort's transcripts** — only
+the cohort can, over an authenticated read channel. The box holds the data without
+holding the keys to it. You don't trust the operator; you verify the enclave.
 
-## Use it (client quickstart)
+## Use it (shape-rotator quickstart)
 
-You have VoxTerm Markdown transcript exports. Verify the enclave, then upload — your
-private author key never leaves your machine.
-
-**Live instance:**
-
-```
-https://737d7cb9c5fbdff22d88408b3fdf3463a1d088b8-8723.dstack-pha-prod5.phala.network
-```
+You're in the shape-rotator cohort, you have VoxTerm Markdown transcript exports, and
+you want them on the always-on sink so anyone in the group can backfill later. Verify
+the enclave, then upload — your private author key never leaves your machine.
 
 ```bash
+# the live shape-rotator sink, and the cohort's hivemind id
 SINK=https://737d7cb9c5fbdff22d88408b3fdf3463a1d088b8-8723.dstack-pha-prod5.phala.network
+HIVEMIND=e743cd05-921c-5554-b79d-e2db6847d9d5      # the shape-rotator hivemind
 
 # 1. install the client (ships in the wheel as `voxterm-sink-upload`)
 pipx install ./voxterm-transcript-sink        # or: pip install ./voxterm-transcript-sink
@@ -26,14 +24,18 @@ pipx install ./voxterm-transcript-sink        # or: pip install ./voxterm-transc
 voxterm-sink-upload verify --sink-url "$SINK" \
   --measurement-policy pinned --measurements ./measurements.json
 
-# 3. upload transcripts into a hivemind
+# 3. upload your transcripts into the shape-rotator hivemind
 voxterm-sink-upload upload ~/Documents/voxterm \
-  --sink-url "$SINK" --hivemind-id <uuid> --recursive
+  --sink-url "$SINK" --hivemind-id "$HIVEMIND" --recursive
 ```
 
+- **`HIVEMIND`** is the shape-rotator cohort's shared hivemind id — everyone in the
+  group uploads under the same one so the transcripts collect together (it's the
+  UUIDv5 of `"shape-rotator"`, so anyone can recompute it). One sink can hold many
+  hiveminds; this is ours.
 - **Uploading needs no secret** — writes are attested-but-open in v1 (your client
   verifies the enclave; the sink accepts the write). **Reading** transcripts back
-  needs the shared read secret, which the operator gives you out-of-band.
+  needs the shared read secret, which the operator shares with the cohort.
 - `--measurement-policy pinned` requires the live TDX quote to match the published
   [`measurements.json`](measurements.json) and **fails closed** otherwise. Omit it to
   fall back to trust-on-first-use (`tofu`).
@@ -41,6 +43,37 @@ voxterm-sink-upload upload ~/Documents/voxterm \
   to preview, `--json` for machine output.
 
 Full walkthrough: [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md).
+
+## Read transcripts back
+
+Anyone in the cohort can read the history back — this is what the always-on sink is
+*for* (backfill for whoever was offline). Reading needs the cohort **read secret**
+(shared out-of-band by the operator). Exchange it for a short-lived bearer token,
+then query:
+
+```bash
+READ_SECRET=<from the operator>      # not the same as uploading — reads are gated
+
+# exchange the read secret for a bearer token (POST /v1/auth)
+TOKEN=$(curl -fsS -X POST "$SINK/v1/auth" -H 'Content-Type: application/json' \
+  -d "{\"tier\":\"cohort\",\"secret\":\"$READ_SECRET\"}" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+# list transcripts in the shape-rotator hivemind
+curl -fsS -H "Authorization: Bearer $TOKEN" "$SINK/v1/transcript?hivemind_id=$HIVEMIND"
+
+# fetch one full transcript, or its chunk log
+curl -fsS -H "Authorization: Bearer $TOKEN" "$SINK/v1/transcript/<id>"
+curl -fsS -H "Authorization: Bearer $TOKEN" "$SINK/v1/transcript/<id>/chunks"
+```
+
+`GET /v1/transcript` supports filters: `hivemind_id`, `session_id`, `author`,
+`tag`, `since`/`until`, `limit`, `cursor`. The `voxterm-sink-upload` CLI doesn't have
+a read subcommand yet — reads go through the HTTP API directly as above.
+
+> v1 read auth is a single shared secret (the spec's labeled placeholder, replacing
+> the `1234` default). It gates the read surface but is **not** per-member auth —
+> that's the deferred coordinator/capability-token work (spec §12).
 
 ## API
 
@@ -83,11 +116,13 @@ pinned measurements trace back to public source — see
 
 ## Where it fits
 
-VoxTerm hivemind is mesh gossip with no coordinator: every member holds a complete
-local replica and syncs when peers are reachable. The gap: it assumes someone is
-online. This is the peer that never sleeps — not a coordinator, just one more node
-that stays online to accept gossiped entries and serve backfill to a member who
-returns.
+shape-rotator is a VoxTerm hivemind: mesh gossip with no coordinator, where every
+member holds a complete local replica and syncs when peers are reachable. The gap is
+liveness — it assumes someone is online. When every laptop in the cohort is closed, a
+member who joins late or reconnects after a week has no peer to sync from. This sink
+is the peer that never sleeps — not a coordinator, just one more node in the
+shape-rotator mesh that stays online to accept gossiped entries and serve backfill to
+a member who returns.
 
 ```
  VoxTerm party-mode session ends

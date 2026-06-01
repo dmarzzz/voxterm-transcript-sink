@@ -75,12 +75,15 @@ Two trust policies:
 ## 3. Quick upload
 
 Point the CLI at your VoxTerm Markdown exports (a file, several files, or a
-directory of `*.md`) and the cohort/hivemind UUID you're uploading into:
+directory of `*.md`) and the cohort's hivemind id. For shape-rotator that's a fixed
+UUID everyone shares (the UUIDv5 of `"shape-rotator"`):
 
 ```bash
+export HIVEMIND=e743cd05-921c-5554-b79d-e2db6847d9d5   # the shape-rotator hivemind
+
 voxterm-sink-upload upload ~/Documents/voxterm \
   --sink-url "$SINK" \
-  --hivemind-id <UUID> \
+  --hivemind-id "$HIVEMIND" \
   --recursive \
   --tag meeting
 ```
