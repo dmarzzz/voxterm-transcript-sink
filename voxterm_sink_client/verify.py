@@ -15,6 +15,7 @@ from voxterm_transcript_sink.canonical import canonical_bytes
 from voxterm_transcript_sink.identity import verify_ed25519
 
 from .http import HTTPTransport
+from .measurements import POLICY_PINNED, POLICY_TOFU, MeasurementError, ReleaseMeasurements
 from .trust import TrustStore
 
 SIGNATURE_HEADER = "X-Sink-Signature"
@@ -80,11 +81,15 @@ def verify_sink(
     transport: HTTPTransport | None = None,
     verifier: Any | None = None,
     trust_store: TrustStore | None = None,
+    policy: str = POLICY_TOFU,
+    release: ReleaseMeasurements | None = None,
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
     sink_url = normalize_sink_url(sink_url)
     transport = transport or HTTPTransport()
     verifier = verifier or PhalaCloudVerifier()
     trust_store = trust_store or TrustStore()
+    if policy == POLICY_PINNED and release is None:
+        raise VerificationError("pinned policy requires a release manifest")
 
     nonce = secrets.token_bytes(32)
     att = transport.get(f"{sink_url}/v1/attestation?nonce={nonce.hex()}")
@@ -100,6 +105,20 @@ def verify_sink(
         bundle, att.headers.get(SIGNATURE_HEADER_KEY), verified["sink_sig_pubkey"]
     ):
         raise VerificationError("invalid attestation response signature")
+
+    # Measurement policy (spec §6.3): pinned checks the live quote against a
+    # known-good release manifest and fails closed on drift; tofu (default) just
+    # records first-contact measurements via the trust store below.
+    verified["policy"] = policy
+    if policy == POLICY_PINNED:
+        try:
+            matched = release.check(
+                compose_hash=verified["compose_hash"],
+                measurements=verified["measurements"],
+            )
+        except MeasurementError as exc:
+            raise VerificationError(f"pinned verification failed: {exc}") from exc
+        verified["pinned"] = {"release": release.release, "base_image": matched.name}
 
     info_resp = transport.get(f"{sink_url}/v1/info")
     if info_resp.status != 200:

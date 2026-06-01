@@ -5,9 +5,31 @@ import json
 import sys
 
 from .identity import load_or_create_author
+from .measurements import POLICIES, POLICY_PINNED, POLICY_TOFU, ReleaseMeasurements, load_release
 from .trust import TrustStore
 from .upload import collect_markdown_paths, upload_files
 from .verify import VerificationError, normalize_sink_url, verify_sink
+
+
+def _add_policy_flags(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--measurement-policy",
+        choices=POLICIES,
+        default=POLICY_TOFU,
+        help="tofu (default): trust-on-first-use; pinned: verify against a release manifest (spec §6.3)",
+    )
+    p.add_argument(
+        "--measurements",
+        metavar="PATH",
+        default=None,
+        help="path to measurements.json for pinned policy (defaults to the manifest bundled with this client)",
+    )
+
+
+def _resolve_release(args: argparse.Namespace) -> ReleaseMeasurements | None:
+    if args.measurement_policy == POLICY_PINNED:
+        return load_release(args.measurements)
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -16,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
 
     verify_p = sub.add_parser("verify")
     verify_p.add_argument("--sink-url", required=True)
+    _add_policy_flags(verify_p)
 
     upload_p = sub.add_parser("upload")
     upload_p.add_argument("paths", nargs="+", metavar="PATH")
@@ -25,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     upload_p.add_argument("--tag", action="append", default=[])
     upload_p.add_argument("--dry-run", action="store_true")
     upload_p.add_argument("--json", action="store_true", dest="json_output")
+    _add_policy_flags(upload_p)
 
     trust_p = sub.add_parser("trust")
     trust_sub = trust_p.add_subparsers(dest="trust_command", required=True)
@@ -36,12 +60,23 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "verify":
-            sink_url, verified, _ = verify_sink(args.sink_url)
+            release = _resolve_release(args)
+            sink_url, verified, _ = verify_sink(
+                args.sink_url, policy=args.measurement_policy, release=release
+            )
             print(f"verified sink {verified['sink_sig_pubkey']} at {sink_url}")
+            if "pinned" in verified:
+                print(
+                    f"pinned to release {verified['pinned']['release']} "
+                    f"(base image {verified['pinned']['base_image']})"
+                )
             return 0
 
         if args.command == "upload":
-            sink_url, verified, info = verify_sink(args.sink_url)
+            release = _resolve_release(args)
+            sink_url, verified, info = verify_sink(
+                args.sink_url, policy=args.measurement_policy, release=release
+            )
             paths = collect_markdown_paths(args.paths, args.recursive)
             author = load_or_create_author()
             uploaded, failed = upload_files(

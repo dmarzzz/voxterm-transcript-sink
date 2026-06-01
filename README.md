@@ -66,7 +66,7 @@ For the reference implementation: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) c
 Read it in that order. The short version of the v1 design:
 
 1. The sink runs in Dstack on Intel TDX. It derives a long-term `sink_sig` identity from its attested app identity and serves a TDX DCAP quote at `GET /v1/attestation`.
-2. A VoxTerm client adds the sink by URL, sends a fresh nonce, verifies the quote against Intel collateral, replays the event log to confirm the running code, checks the quote's `report_data` binds the sink's key (channel binding plus freshness), and only then pushes.
+2. A VoxTerm client adds the sink by URL, sends a fresh nonce, verifies the quote against Intel collateral, replays the event log to confirm the running code, checks the quote's `report_data` binds the sink's key (channel binding plus freshness), and only then pushes. Verification runs in one of two measurement policies (spec §6.3): `tofu` (default — trust the measurements on first contact, warn if they change) or `pinned` (`--measurement-policy pinned` — require the live quote to match the published `measurements.json` for a release, fail closed otherwise).
 3. Push is a live `POST /v1/transcript/stream` (NDJSON chunk stream) or a single `POST /v1/transcript` on finalize. Whether you stream live or post once is a client choice; the sink supports both.
 4. Read is `GET /v1/transcript`. v1 read auth is a labeled placeholder: a shared static secret defaulting to `1234`. It is not real auth and the spec says so. The real cohort/coordinator model is defined and deferred.
 
