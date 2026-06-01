@@ -235,7 +235,7 @@ def make_event_log(
             {
                 "imr": "3",
                 "event": name,
-                "event_payload": value,
+                "event_payload": value.encode("utf-8").hex(),
                 "digest": sha384(value.encode("utf-8")).hexdigest(),
             }
         )

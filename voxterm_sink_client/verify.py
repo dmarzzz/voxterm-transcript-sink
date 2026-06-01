@@ -229,18 +229,18 @@ def _event_digest(event: dict[str, Any]) -> str:
     if isinstance(digest, str):
         normalized = _require_hex(digest, None, "event digest")
         if isinstance(payload, str):
-            expected = sha384(payload.encode("utf-8")).hexdigest()
-            if normalized != expected:
+            if normalized not in _payload_digest_candidates(payload):
                 raise VerificationError("RTMR3 event digest does not match event_payload")
         return normalized
     if isinstance(payload, str):
-        return sha384(payload.encode("utf-8")).hexdigest()
+        return _payload_digest_candidates(payload)[0]
     raise VerificationError("RTMR3 event missing digest or event_payload")
 
 
 def _event_value(event: dict[str, Any]) -> str | None:
     payload = event.get("event_payload")
     if isinstance(payload, str) and payload:
+        payload = _decode_event_payload(payload)
         try:
             decoded = json.loads(payload)
         except json.JSONDecodeError:
@@ -254,6 +254,27 @@ def _event_value(event: dict[str, Any]) -> str | None:
                     return value
     digest = event.get("digest")
     return digest if isinstance(digest, str) and digest else None
+
+
+def _payload_digest_candidates(payload: str) -> list[str]:
+    candidates = [sha384(payload.encode("utf-8")).hexdigest()]
+    try:
+        raw = bytes.fromhex(payload)
+    except ValueError:
+        return candidates
+    if len(payload) % 2 == 0:
+        candidates.insert(0, sha384(raw).hexdigest())
+    return candidates
+
+
+def _decode_event_payload(payload: str) -> str:
+    if len(payload) % 2 != 0:
+        return payload
+    try:
+        decoded = bytes.fromhex(payload).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return payload
+    return decoded
 
 
 def _replay_rtmr(history: list[str]) -> str:
