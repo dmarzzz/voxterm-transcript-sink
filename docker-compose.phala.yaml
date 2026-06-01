@@ -2,14 +2,14 @@
 #
 # Build and push a public Docker Hub image first, then replace the digest below:
 #   docker buildx build --platform linux/amd64 \
-#     -t dmarzzz/voxterm-data-sink:v0.1.0-staging.1 --push .
-#   docker buildx imagetools inspect dmarzzz/voxterm-data-sink:v0.1.0-staging.1
+#     -t sh1sh1nk/voxterm-data-sink:v0.1.0-staging.1 --push .
+#   docker buildx imagetools inspect sh1sh1nk/voxterm-data-sink:v0.1.0-staging.1
 #
 # Deploy with Phala CLI and provide VOXTERM_SINK_READ_SECRET as an encrypted
 # environment variable. Do not commit a real secret into this file.
 services:
   voxterm-data-sink:
-    image: dmarzzz/voxterm-data-sink@sha256:REPLACE_WITH_IMAGE_DIGEST
+    image: sh1sh1nk/voxterm-data-sink@sha256:REPLACE_WITH_IMAGE_DIGEST
     restart: always
     environment:
       - VOXTERM_SINK_READ_SECRET=${VOXTERM_SINK_READ_SECRET:?set via phala deploy -e}

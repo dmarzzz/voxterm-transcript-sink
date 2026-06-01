@@ -18,17 +18,17 @@ replaced and `VOXTERM_SINK_READ_SECRET` is set.
 
 ```bash
 docker buildx build --platform linux/amd64 \
-  -t dmarzzz/voxterm-data-sink:v0.1.0-staging.1 \
+  -t sh1sh1nk/voxterm-data-sink:v0.1.0-staging.1 \
   --push .
 
 docker buildx imagetools inspect \
-  dmarzzz/voxterm-data-sink:v0.1.0-staging.1
+  sh1sh1nk/voxterm-data-sink:v0.1.0-staging.1
 ```
 
 Copy the reported `sha256` digest into `docker-compose.phala.yaml`:
 
 ```yaml
-image: dmarzzz/voxterm-data-sink@sha256:<digest>
+image: sh1sh1nk/voxterm-data-sink@sha256:<digest>
 ```
 
 ## 3. Deploy to Phala
