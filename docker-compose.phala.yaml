@@ -9,7 +9,7 @@
 # environment variable. Do not commit a real secret into this file.
 services:
   voxterm-data-sink:
-    image: sh1sh1nk/voxterm-data-sink@sha256:REPLACE_WITH_IMAGE_DIGEST
+    image: sh1sh1nk/voxterm-data-sink@sha256:fe867fdf44163da70e536a2ae85c802fb685e0f3985d031a8fbfc9d2e92a41ee
     restart: always
     environment:
       - VOXTERM_SINK_READ_SECRET=${VOXTERM_SINK_READ_SECRET:?set via phala deploy -e}
