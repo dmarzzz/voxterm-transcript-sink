@@ -123,6 +123,17 @@ def test_directory_scan_is_sorted_and_nonrecursive_by_default(tmp_path):
     ]
 
 
+def test_directory_scan_rejects_explicit_symlinked_directory(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    write_export(target / "a.md", "")
+    link = tmp_path / "linked"
+    link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlinked directories are not supported"):
+        collect_markdown_paths([str(link)])
+
+
 class FakeVerifier:
     def verify_attestation(self, bundle: dict[str, Any]) -> dict[str, Any]:
         nonce = bytes.fromhex(bundle["nonce"])
@@ -158,6 +169,7 @@ class FakeSinkTransport:
         non_json_error: bool = False,
         sink_dh_pubkey: str | None = None,
         tamper_event_payload: bool = False,
+        omit_metadata_payload: bool = False,
     ):
         self.identity = identity or SinkIdentity.from_seed("client-test")
         self.provider = DevQuoteProvider("client-test")
@@ -166,6 +178,7 @@ class FakeSinkTransport:
         self.non_json_error = non_json_error
         self.sink_dh_pubkey = sink_dh_pubkey
         self.tamper_event_payload = tamper_event_payload
+        self.omit_metadata_payload = omit_metadata_payload
 
     def get(self, url: str, headers: dict[str, str] | None = None) -> HTTPResult:
         if "/v1/attestation?nonce=" in url:
@@ -180,6 +193,7 @@ class FakeSinkTransport:
                     body["app_id"],
                     body["instance_id"],
                     tamper_payload=self.tamper_event_payload,
+                    omit_payload=self.omit_metadata_payload,
                 )
             body["produced_at"] = "2026-06-01T00:00:00Z"
             return self._signed_response(200, body)
@@ -224,6 +238,7 @@ def make_event_log(
     instance_id: str,
     *,
     tamper_payload: bool = False,
+    omit_payload: bool = False,
 ) -> str:
     events = []
     for name, value in (
@@ -241,6 +256,8 @@ def make_event_log(
         )
     if tamper_payload:
         events[0]["event_payload"] = "tampered-compose-hash"
+    if omit_payload:
+        events[0].pop("event_payload")
     return json.dumps(events)
 
 
@@ -305,6 +322,16 @@ def test_verify_sink_rejects_event_payload_digest_mismatch(tmp_path):
         verify_sink(
             "https://sink.test",
             transport=FakeSinkTransport(tamper_event_payload=True),
+            verifier=FakeVerifier(),
+            trust_store=TrustStore(tmp_path / "trust.json"),
+        )
+
+
+def test_verify_sink_rejects_named_metadata_event_without_payload(tmp_path):
+    with pytest.raises(VerificationError, match="compose_hash event missing event_payload"):
+        verify_sink(
+            "https://sink.test",
+            transport=FakeSinkTransport(omit_metadata_payload=True),
             verifier=FakeVerifier(),
             trust_store=TrustStore(tmp_path / "trust.json"),
         )

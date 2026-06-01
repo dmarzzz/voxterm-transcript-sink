@@ -28,6 +28,8 @@ def collect_markdown_paths(paths: list[str], recursive: bool = False) -> list[Pa
     found: list[Path] = []
     for raw in paths:
         path = Path(raw)
+        if path.is_symlink() and path.is_dir():
+            raise ValueError(f"symlinked directories are not supported: {raw}")
         if path.is_dir():
             iterator = path.rglob("*.md") if recursive else path.glob("*.md")
             found.extend(p for p in iterator if p.is_file())

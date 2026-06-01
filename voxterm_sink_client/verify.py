@@ -212,9 +212,8 @@ def _replay_event_log(bundle: dict[str, Any]) -> dict[str, str]:
         history.append(digest)
         name = str(event.get("event", "")).lower()
         key = names.get(name)
-        value = _event_value(event)
-        if key and value:
-            found[key] = value
+        if key:
+            found[key] = _metadata_event_value(event, key)
     missing = [key for key in ("app_id", "compose_hash", "instance_id") if key not in found]
     if missing:
         raise VerificationError(f"attestation event_log missing {', '.join(missing)}")
@@ -237,23 +236,30 @@ def _event_digest(event: dict[str, Any]) -> str:
     raise VerificationError("RTMR3 event missing digest or event_payload")
 
 
-def _event_value(event: dict[str, Any]) -> str | None:
+def _metadata_event_value(event: dict[str, Any], key: str) -> str:
+    value = _event_payload_value(event)
+    if not value:
+        raise VerificationError(f"attestation event_log {key} event missing event_payload")
+    return value
+
+
+def _event_payload_value(event: dict[str, Any]) -> str | None:
     payload = event.get("event_payload")
-    if isinstance(payload, str) and payload:
-        payload = _decode_event_payload(payload)
-        try:
-            decoded = json.loads(payload)
-        except json.JSONDecodeError:
-            return payload
-        if isinstance(decoded, str):
-            return decoded
-        if isinstance(decoded, dict):
-            for key in ("digest", "value", "id", "hash"):
-                value = decoded.get(key)
-                if isinstance(value, str):
-                    return value
-    digest = event.get("digest")
-    return digest if isinstance(digest, str) and digest else None
+    if not isinstance(payload, str) or not payload:
+        return None
+    payload = _decode_event_payload(payload)
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError:
+        return payload
+    if isinstance(decoded, str):
+        return decoded
+    if isinstance(decoded, dict):
+        for key in ("digest", "value", "id", "hash"):
+            value = decoded.get(key)
+            if isinstance(value, str):
+                return value
+    return None
 
 
 def _payload_digest_candidates(payload: str) -> list[str]:
