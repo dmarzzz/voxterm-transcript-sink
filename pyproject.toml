@@ -24,6 +24,7 @@ dev = ["pytest>=8.0", "httpx>=0.27"]
 
 [project.scripts]
 voxterm-data-sink = "voxterm_transcript_sink.__main__:main"
+voxterm-sink-upload = "voxterm_sink_client.__main__:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["voxterm_transcript_sink"]
+packages = ["voxterm_transcript_sink", "voxterm_sink_client"]
