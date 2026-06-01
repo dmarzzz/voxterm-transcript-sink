@@ -22,8 +22,8 @@ voxterm-sink-upload verify \
   --measurement-policy pinned --measurements ./measurements.json
 ```
 
-A separate `voxterm-transcript-sink-staging` app also exists (its own app-id /
-identity / volume); it is a test bed, not the production system.
+`voxterm-transcript-sink-prod` is the only deployed app (an earlier staging CVM
+was retired). Stand up a separate staging app only if you need a test bed.
 
 ## Reproducing / re-deploying this (needs Phala credentials)
 
@@ -36,7 +36,7 @@ VOXTERM_SINK_READ_SECRET=x docker compose -f docker-compose.phala.yaml config >/
 
 ### 2. Fresh production read secret
 
-Never reuse staging or the `1234` default (spec §8.3). Keep it safe — read
+Never reuse a prior secret or the `1234` default (spec §8.3). Keep it safe — read
 clients need it. Pass it via an env file (avoids leaking it in `ps`):
 
 ```bash

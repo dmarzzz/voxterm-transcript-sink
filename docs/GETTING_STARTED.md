@@ -38,7 +38,7 @@ You need the sink's base URL from whoever runs it. On Phala/dstack it looks like
 `https://<app-id>-8723.<gateway-domain>`.
 
 ```bash
-# first contact / staging — trust-on-first-use (the default policy)
+# first contact — trust-on-first-use (the default policy)
 voxterm-sink-upload verify --sink-url https://<app-id>-8723.<gateway-domain>
 ```
 
