@@ -1,0 +1,5 @@
+name = "voxterm-transcript-sink-staging"
+compose_file = "docker-compose.phala.yaml"
+public_logs = false
+public_sysinfo = false
+listed = false

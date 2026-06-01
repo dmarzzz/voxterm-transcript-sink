@@ -1,0 +1,31 @@
+# Phala Cloud staging deployment for voxterm-data-sink.
+#
+# Build and push a GHCR image first, then replace the digest below:
+#   docker buildx build --platform linux/amd64 \
+#     -t ghcr.io/dmarzzz/voxterm-data-sink:v0.1.0-staging.1 --push .
+#   docker buildx imagetools inspect ghcr.io/dmarzzz/voxterm-data-sink:v0.1.0-staging.1
+#
+# Deploy with Phala CLI and provide VOXTERM_SINK_READ_SECRET as an encrypted
+# environment variable. Do not commit a real secret into this file.
+services:
+  voxterm-data-sink:
+    image: ghcr.io/dmarzzz/voxterm-data-sink@sha256:REPLACE_WITH_IMAGE_DIGEST
+    restart: always
+    environment:
+      - VOXTERM_SINK_READ_SECRET=${VOXTERM_SINK_READ_SECRET:?set via phala deploy -e}
+      - VOXTERM_SINK_ATTEST=dstack
+      - VOXTERM_SINK_SNAPSHOT=/data/sink-snapshot.json
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - sink-data:/data
+    ports:
+      - "8723:8723"
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8723/v1/health', timeout=3).read()\nPY"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  sink-data:
