@@ -227,7 +227,7 @@ def _event_digest(event: dict[str, Any]) -> str:
     digest = event.get("digest")
     payload = event.get("event_payload")
     if isinstance(digest, str):
-        normalized = _require_hex(digest, None, "event digest")
+        normalized = _require_hex(digest, 48, "event digest")
         if isinstance(payload, str):
             if normalized not in _payload_digest_candidates(payload):
                 raise VerificationError("RTMR3 event digest does not match event_payload")
