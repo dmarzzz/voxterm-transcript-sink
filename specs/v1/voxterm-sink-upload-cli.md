@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Spec** | VoxTerm Sink Upload CLI |
-| **Version** | `0.1.0-draft.1` |
+| **Version** | `0.1.0-draft.2` |
 | **Status** | Draft |
 | **Wire dependency** | [`voxterm-sink/1`](./voxterm-sink-protocol.md) |
 | **Target runtime** | Local CLI uploading to a Phala Cloud / Dstack TEE sink |
@@ -36,7 +36,8 @@ The CLI MUST NOT:
 - implement a GUI;
 - replace the full VoxTerm client integration described in
   `VoxTerm/docs/specs/hivemind-sink-integration.md`;
-- weaken sink verification by default.
+- weaken sink verification by default;
+- implement sink write-auth negotiation in v1.
 
 ## 2. Packaging
 
@@ -75,7 +76,9 @@ voxterm-sink-upload trust reset --sink-url URL
 
 `upload` verifies the TEE sink, converts each input path into a transcript, and
 uploads it. If a directory is provided, the CLI scans `*.md` files in that
-directory. Recursive scanning MUST require `--recursive`.
+directory. Recursive scanning MUST require `--recursive`. Directory results MUST
+be sorted lexicographically by resolved path before upload. Symlinks to files
+MAY be uploaded, but symlinked directories MUST NOT be traversed in v1.
 
 `trust inspect` prints the local trusted sink records without secrets.
 
@@ -96,8 +99,10 @@ delete transcripts from the sink.
 | `--dry-run` | no | Parse and build transcripts, but do not upload. |
 | `--json` | no | Emit machine-readable JSON result output. |
 
-The CLI MAY later support `--timezone`, `--content-type`, or alternate input
-formats, but v1 SHOULD keep those out unless a concrete need appears.
+The CLI MAY later support alternate input formats, but v1 SHOULD keep those out
+unless a concrete need appears. It MUST NOT add a timezone option in v1 because
+timezone-dependent `created_at` values would change content-addressed transcript
+IDs across machines.
 
 ## 4. Input Format
 
@@ -112,6 +117,17 @@ The v1 CLI accepts VoxTerm Markdown transcript exports. A valid input file MUST:
 **[HH:MM:SS]** **Speaker:** text
 **[HH:MM:SS]** text
 ```
+
+The parser SHOULD use these equivalent grammars:
+
+```text
+labelled   := "**[" HH:MM:SS "]**" whitespace "**" speaker_label ":**" whitespace text
+unlabelled := "**[" HH:MM:SS "]**" whitespace text
+```
+
+`speaker_label` MAY contain spaces and punctuation but MUST NOT contain a
+newline or the literal marker `:**`. Leading and trailing whitespace around the
+label is stripped.
 
 The parser SHOULD tolerate the two known VoxTerm header styles:
 
@@ -179,12 +195,16 @@ signature prefixes.
 
 ### 5.2 Time Handling
 
-`session_id` is timezone-free. For v1, the CLI SHOULD interpret the filename
-timestamp in the local system timezone and convert it to UTC for `created_at`.
-This is acceptable for manual imports because VoxTerm exports are local files.
+`session_id` is timezone-free. For v1, the CLI MUST interpret the filename
+timestamp as UTC and render `created_at` as the same instant with a trailing
+`Z`. This is deliberately conservative: the original true recording timezone is
+not encoded in the filename, and `created_at` participates in the
+content-addressed transcript ID. Treating the filename as UTC keeps IDs
+globally reproducible across machines, DST changes, and re-imports.
 
-Transcript line timestamps are `HH:MM:SS` offsets on the session date. Segment
-times MUST be stored as seconds relative to session start:
+Transcript line timestamps are wall-clock `HH:MM:SS` values on the session date,
+matching VoxTerm's Markdown export format. They are not elapsed timestamps.
+Segment times MUST be stored as seconds relative to session start:
 
 - `t_start` is the parsed line timestamp minus the session start time.
 - `t_end` is the next segment's `t_start`.
@@ -194,6 +214,8 @@ times MUST be stored as seconds relative to session start:
 - Negative `t_start` values SHOULD be clamped to `0.0` only if the line appears
   within a small tolerance of the session start; otherwise the file should fail
   validation.
+- `t_start` and `t_end` MUST be rounded to exactly three decimal places before
+  canonicalization so JCS IDs and signatures are stable across implementations.
 
 ### 5.3 Speaker Mapping
 
@@ -217,7 +239,8 @@ The `source` object MUST preserve enough provenance to audit an import:
 ```json
 {
   "tool": "voxterm-sink-upload",
-  "tool_version": "0.1.0-draft.1",
+  "tool_version": "<actual CLI package version>",
+  "spec_version": "0.1.0-draft.2",
   "input_format": "voxterm-markdown",
   "filename": "2026-06-01_120000-transcript.md",
   "file_blake3": "<64 hex chars>",
@@ -239,10 +262,10 @@ Recommended path:
 ~/.config/voxterm-sink-client/author_ed25519.key
 ```
 
-The key file MUST contain only the raw 32-byte private key material, encoded in
-hex or another explicit implementation-defined format. It MUST be written with
-owner-only permissions where supported (`0600`). The private key MUST never be
-sent to the sink.
+The key file MUST contain exactly one line: 64 lowercase hex chars representing
+the raw 32-byte Ed25519 private key. It MUST be written with owner-only
+permissions where supported (`0600`). The private key MUST never be sent to the
+sink.
 
 The wire `author` field is the raw Ed25519 public key as 64 lowercase hex chars.
 
@@ -250,6 +273,14 @@ The wire `author` field is the raw Ed25519 public key as 64 lowercase hex chars.
 
 The CLI MUST verify the sink before upload. The default policy is TOFU
 (trust-on-first-use). There is no default insecure mode.
+
+The CLI MUST normalize sink URLs before verification, storage, and upload:
+
+- lowercase scheme and host;
+- strip one trailing slash;
+- strip exactly one trailing `/v1`;
+- remove default ports `:443` for HTTPS and `:80` for HTTP;
+- reject paths other than `/` or `/v1`.
 
 The CLI MUST:
 
@@ -273,15 +304,24 @@ The CLI MUST:
    )
    ```
 5. Compare the recomputed value to the verified quote's `reportdata`.
-6. Fetch:
+6. Replay the Dstack event log from the attestation bundle and require the
+   replayed RTMR3 and extracted `app_id`, `compose_hash`, and `instance_id` to
+   match the independently verified quote/verifier output. If the Phala
+   attestation API response already includes an event-log replay result, the CLI
+   MAY use that result, but it MUST still fail closed if the replayed fields are
+   absent or inconsistent.
+7. After the quote-bound `sink_sig_pubkey` is known, verify
+   `X-Sink-Signature` on the `/v1/attestation` response body using that key.
+8. Fetch:
    ```http
    GET {sink_url}/v1/info
    ```
-7. Verify `X-Sink-Signature` on the `/v1/info` JSON body using the attested
+9. Verify `X-Sink-Signature` on the `/v1/info` JSON body using the attested
    `sink_sig_pubkey`.
-8. Require `app_id` and `compose_hash` from `/v1/info` to match the attestation
-   bundle and/or verifier output.
-9. Apply the local TOFU trust policy.
+10. Require `app_id` and `compose_hash` from `/v1/info` to match both the
+    attestation bundle and the independently verified/replayed attestation
+    result.
+11. Apply the local TOFU trust policy.
 
 The implementation SHOULD also support a local verifier backend later, such as
 `dcap-qvl` or a Phala/dstack verifier binary, but the first CLI can use the
@@ -310,6 +350,13 @@ Shape:
       "sink_sig_pubkey": "<hex ed25519 pubkey>",
       "app_id": "<hex>",
       "compose_hash": "<hex sha256>",
+      "measurements": {
+        "mrtd": "<hex sha384>",
+        "rtmr0": "<hex sha384>",
+        "rtmr1": "<hex sha384>",
+        "rtmr2": "<hex sha384>",
+        "rtmr3": "<hex sha384>"
+      },
       "first_seen": "2026-06-01T00:00:00Z",
       "last_verified": "2026-06-01T00:00:00Z",
       "urls": ["https://sink.example"],
@@ -328,10 +375,15 @@ On later verification:
 
 - A known URL presenting a different `sink_sig_pubkey` MUST fail.
 - A known sink presenting a different `compose_hash` MUST fail.
-- A URL change with the same verified sink key and compose hash MAY be added to
-  the same sink record.
+- A known sink presenting different `MRTD`, `RTMR0`, `RTMR1`, `RTMR2`, or
+  `RTMR3` MUST fail.
+- A URL change with the same verified sink key, compose hash, and measurements
+  MAY be added to the same sink record.
 - `trust reset --sink-url URL` is the only v1 mechanism for accepting a changed
   sink or redeploy.
+
+If `trust reset --sink-url URL` removes the last URL from a sink record, the CLI
+MUST delete the sink record as well.
 
 ## 9. Upload Protocol
 
@@ -348,7 +400,10 @@ The CLI MUST treat:
 - `201` as newly stored;
 - `200` as already stored/idempotent success;
 - `409 id_mismatch` as a client conversion bug;
-- `400 schema_mismatch` as an invalid input/conversion failure;
+- any `400` as a hard per-file failure whose displayed cause MUST come from the
+  returned `error.code` and `error.message`;
+- `401` or `403` as unsupported by this MVP unless a future version adds a
+  `--cohort-secret` or `--auth-token` flow;
 - `413 payload_too_large` as a hard failure for that file.
 
 For `200` or `201`, the CLI MUST verify `X-Sink-Signature` on the JSON response
@@ -378,7 +433,7 @@ material or bearer tokens:
     {
       "path": "2026-06-01_120000-transcript.md",
       "id": "<transcript id>",
-      "status": "stored"
+      "status": "created"
     }
   ],
   "failed": []
@@ -395,13 +450,18 @@ The implementation MUST include tests for:
 - Unlabelled transcript lines.
 - Stable speaker label to `local_id` mapping.
 - Midnight rollover.
+- UTC filename timestamp handling for reproducible `created_at`.
+- Three-decimal segment time rounding before ID/signature canonicalization.
 - Deterministic transcript IDs.
 - Valid Ed25519 author signatures.
 - TOFU first-use accept.
 - TOFU repeated-sink accept.
 - TOFU changed sink key rejection.
 - TOFU changed compose hash rejection.
+- TOFU changed MRTD/RTMR measurement rejection.
 - `trust reset` removal by URL.
+- Deterministic directory scan ordering.
+- Sink URL normalization.
 - Upload success for `201`.
 - Upload idempotent success for `200`.
 - Upload failure for `400`, `409`, and `413`.
@@ -414,7 +474,9 @@ Offline tests MUST use fixture attestation/verifier responses to cover:
 - accepted verified quote with matching nonce/reportdata;
 - rejected verifier response where quote verification is false;
 - rejected mismatched nonce/reportdata;
+- rejected event-log replay mismatch or missing replay fields;
 - rejected missing or malformed attestation fields;
+- rejected `/v1/attestation` response signature;
 - rejected `/v1/info` signature;
 - rejected `/v1/info` app or compose mismatch.
 
