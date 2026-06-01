@@ -159,8 +159,20 @@ Summary blocks inserted by VoxTerm summary export MUST be preserved in the
 `markdown` field but MUST NOT be parsed as transcript segments unless they match
 the transcript-line grammar.
 
-Files with no transcript lines SHOULD be rejected by default because the sink
-expects a useful transcript payload.
+VoxTerm also writes UI/control events into exports, for example:
+
+```markdown
+**[15:12:38]** **sys:** loading model: fw-small...
+**[15:12:58]** **rec:** recording started
+```
+
+The reserved labels `sys`, `rec`, and `party` MUST be treated as control events,
+not speech. They MUST be preserved in the original `markdown` field and MAY be
+counted in `source.control_event_count`, but they MUST NOT become transcript
+`segments` and MUST NOT allocate speaker IDs.
+
+Files with no speech transcript lines after filtering control events SHOULD be
+rejected by default because the sink expects a useful transcript payload.
 
 ## 5. Conversion To `Transcript`
 
@@ -250,6 +262,8 @@ The `source` object MUST preserve enough provenance to audit an import:
 ```
 
 `model` and `language` MAY be omitted if the header does not contain them.
+`control_event_count` SHOULD be included when reserved VoxTerm UI/control events
+were filtered from `segments`.
 
 ## 6. Author Identity
 
@@ -447,6 +461,8 @@ The implementation MUST include tests for:
 - Markdown parsing of standard exported files.
 - Markdown parsing of live autosave files.
 - Summary blocks being preserved in `markdown` but not parsed as dialogue.
+- `sys`, `rec`, and `party` control events being preserved in `markdown` but
+  excluded from `segments`.
 - Unlabelled transcript lines.
 - Stable speaker label to `local_id` mapping.
 - Midnight rollover.
