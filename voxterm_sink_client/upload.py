@@ -77,7 +77,10 @@ def upload_files(
 def _handle_upload_response(
     path: Path, expected_id: str, resp: HTTPResult, sink_pubkey: str
 ) -> UploadResult:
-    body = resp.json()
+    try:
+        body = resp.json()
+    except json.JSONDecodeError:
+        raise ValueError(f"HTTP {resp.status}: non-JSON response") from None
     if resp.status in (200, 201):
         if not verify_response_signature(body, resp.headers.get(SIGNATURE_HEADER), sink_pubkey):
             raise ValueError("invalid upload response signature")

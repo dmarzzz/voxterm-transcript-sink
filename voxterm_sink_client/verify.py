@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import secrets
+from dataclasses import dataclass
+from hashlib import sha384
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import blake3
 
 from voxterm_transcript_sink import WIRE
-from voxterm_transcript_sink.attestation import DEV_QUOTE_MAGIC, compute_report_data
+from voxterm_transcript_sink.attestation import compute_report_data
 from voxterm_transcript_sink.canonical import canonical_bytes
 from voxterm_transcript_sink.identity import verify_ed25519
 
@@ -20,6 +22,12 @@ SIGNATURE_HEADER = "X-Sink-Signature"
 
 class VerificationError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class VerifiedQuote:
+    reportdata: str
+    measurements: dict[str, str]
 
 
 def normalize_sink_url(url: str) -> str:
@@ -114,41 +122,27 @@ def _verify_attestation_bundle(
     bundle: dict[str, Any], nonce: bytes, verifier: Any
 ) -> dict[str, Any]:
     sink_pub = _require_hex(bundle.get("sink_sig_pubkey"), 32, "sink_sig_pubkey")
+    dh_pub = _optional_hex(bundle.get("sink_dh_pubkey"), 32, "sink_dh_pubkey")
     bundle_nonce = _require_hex(bundle.get("nonce"), 32, "nonce")
     if bytes.fromhex(bundle_nonce) != nonce:
         raise VerificationError("attestation nonce mismatch")
-    report_data = compute_report_data(bytes.fromhex(sink_pub), None, nonce).hex()
+    report_data = compute_report_data(
+        bytes.fromhex(sink_pub),
+        bytes.fromhex(dh_pub) if dh_pub is not None else None,
+        nonce,
+    ).hex()
 
     verifier_result = verifier.verify_attestation(bundle)
-    if not _extract_verified(verifier_result):
-        raise VerificationError("quote verifier did not mark quote verified")
-
-    observed_report = _find_hex_value(verifier_result, ("reportdata", "report_data"), 64)
-    if observed_report is None:
-        # Test/dev verifier fallback: the dstack simulator embeds REPORTDATA in the quote.
-        quote = bytes.fromhex(_require_hex(bundle.get("quote"), None, "quote"))
-        if not quote.startswith(DEV_QUOTE_MAGIC) and bytes.fromhex(report_data) not in quote:
-            raise VerificationError("verifier response omitted reportdata")
-        observed_report = report_data
-    if observed_report != report_data:
+    quote = _extract_verified_quote(verifier_result)
+    if quote.reportdata != report_data:
         raise VerificationError("attestation reportdata mismatch")
 
-    measurements = {
-        "mrtd": _find_hex_value(verifier_result, ("mrtd",), 48),
-        "rtmr0": _find_hex_value(verifier_result, ("rtmr0",), 48),
-        "rtmr1": _find_hex_value(verifier_result, ("rtmr1",), 48),
-        "rtmr2": _find_hex_value(verifier_result, ("rtmr2",), 48),
-        "rtmr3": _find_hex_value(verifier_result, ("rtmr3",), 48),
-    }
-    if any(v is None for v in measurements.values()):
-        measurements = _measurements_from_dev_quote(bundle)
-
-    replayed = _replay_event_log_fields(bundle)
-    app_id = _find_string(verifier_result, ("app_id",)) or replayed.get("app_id")
-    compose_hash = _find_string(verifier_result, ("compose_hash",)) or replayed.get("compose_hash")
-    instance_id = _find_string(verifier_result, ("instance_id",)) or replayed.get("instance_id")
-    if app_id is None or compose_hash is None or instance_id is None:
-        raise VerificationError("verifier response omitted replayed event-log fields")
+    replayed = _replay_event_log(bundle)
+    if replayed["rtmr3"] != quote.measurements["rtmr3"]:
+        raise VerificationError("event log RTMR3 replay mismatch")
+    app_id = replayed["app_id"]
+    compose_hash = replayed["compose_hash"]
+    instance_id = replayed["instance_id"]
     if app_id != bundle.get("app_id", ""):
         raise VerificationError("attestation app_id mismatch")
     if compose_hash != bundle.get("compose_hash", ""):
@@ -161,87 +155,43 @@ def _verify_attestation_bundle(
         "app_id": app_id,
         "compose_hash": compose_hash,
         "instance_id": instance_id,
-        "measurements": measurements,
+        "measurements": quote.measurements,
         "verifier": {"provider": "phala-cloud-api", "summary": _redact(verifier_result)},
     }
 
 
-def _extract_verified(obj: Any) -> bool:
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            normalized = key.lower().replace("_", "")
-            if normalized in {"verified", "isvalid", "quoteverified"}:
-                return bool(value)
-            if normalized in {"status", "quotestatus"} and str(value).lower() in {
-                "verified",
-                "ok",
-                "success",
-            }:
-                return True
-        return any(_extract_verified(v) for v in obj.values())
-    if isinstance(obj, list):
-        return any(_extract_verified(v) for v in obj)
-    return False
+def _extract_verified_quote(verifier_result: dict[str, Any]) -> VerifiedQuote:
+    if not isinstance(verifier_result, dict) or verifier_result.get("success") is not True:
+        raise VerificationError("quote verifier did not mark request successful")
+    quote = verifier_result.get("quote")
+    if not isinstance(quote, dict) or quote.get("verified") is not True:
+        raise VerificationError("quote verifier did not mark quote verified")
+    body = quote.get("body")
+    if not isinstance(body, dict):
+        raise VerificationError("verifier response omitted quote body")
+    measurements = {
+        "mrtd": _require_hex(body.get("mrtd"), 48, "mrtd"),
+        "rtmr0": _require_hex(body.get("rtmr0"), 48, "rtmr0"),
+        "rtmr1": _require_hex(body.get("rtmr1"), 48, "rtmr1"),
+        "rtmr2": _require_hex(body.get("rtmr2"), 48, "rtmr2"),
+        "rtmr3": _require_hex(body.get("rtmr3"), 48, "rtmr3"),
+    }
+    return VerifiedQuote(
+        reportdata=_require_hex(body.get("reportdata"), 64, "reportdata"),
+        measurements=measurements,
+    )
 
 
-def _find_hex_value(obj: Any, keys: tuple[str, ...], byte_len: int | None) -> str | None:
-    keyset = {k.lower().replace("_", "") for k in keys}
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key.lower().replace("_", "") in keyset and isinstance(value, str):
-                value = value.lower().removeprefix("0x")
-                if _is_hex(value) and (byte_len is None or len(value) == byte_len * 2):
-                    return value
-            found = _find_hex_value(value, keys, byte_len)
-            if found is not None:
-                return found
-    elif isinstance(obj, list):
-        for item in obj:
-            found = _find_hex_value(item, keys, byte_len)
-            if found is not None:
-                return found
-    return None
-
-
-def _find_string(obj: Any, keys: tuple[str, ...]) -> str | None:
-    keyset = {k.lower().replace("_", "") for k in keys}
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key.lower().replace("_", "") in keyset and isinstance(value, str):
-                return value
-            found = _find_string(value, keys)
-            if found is not None:
-                return found
-    elif isinstance(obj, list):
-        for item in obj:
-            found = _find_string(item, keys)
-            if found is not None:
-                return found
-    return None
-
-
-def _measurements_from_dev_quote(bundle: dict[str, Any]) -> dict[str, str]:
-    quote = bytes.fromhex(_require_hex(bundle.get("quote"), None, "quote"))
-    if not quote.startswith(DEV_QUOTE_MAGIC):
-        raise VerificationError("verifier response omitted replayed measurements")
-    offset = len(DEV_QUOTE_MAGIC) + 64
-    fields = {}
-    for key in ("mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"):
-        fields[key] = quote[offset : offset + 48].hex()
-        offset += 48
-    return fields
-
-
-def _replay_event_log_fields(bundle: dict[str, Any]) -> dict[str, str]:
+def _replay_event_log(bundle: dict[str, Any]) -> dict[str, str]:
     raw = bundle.get("event_log")
     if not isinstance(raw, str):
-        return {}
+        raise VerificationError("attestation event_log is missing")
     try:
         events = json.loads(raw)
     except json.JSONDecodeError:
-        return {}
+        raise VerificationError("attestation event_log is malformed JSON") from None
     if not isinstance(events, list):
-        return {}
+        raise VerificationError("attestation event_log must be a JSON array")
     found: dict[str, str] = {}
     names = {
         "compose-hash": "compose_hash",
@@ -251,15 +201,64 @@ def _replay_event_log_fields(bundle: dict[str, Any]) -> dict[str, str]:
         "instance-id": "instance_id",
         "instance_id": "instance_id",
     }
+    history: list[str] = []
     for event in events:
         if not isinstance(event, dict):
             continue
+        imr = event.get("imr", event.get("rtmr"))
+        if imr != 3:
+            continue
+        digest = _event_digest(event)
+        history.append(digest)
         name = str(event.get("event", "")).lower()
         key = names.get(name)
-        digest = event.get("digest")
-        if key and isinstance(digest, str):
-            found[key] = digest
-    return found
+        value = _event_value(event)
+        if key and value:
+            found[key] = value
+    missing = [key for key in ("app_id", "compose_hash", "instance_id") if key not in found]
+    if missing:
+        raise VerificationError(f"attestation event_log missing {', '.join(missing)}")
+    if not history:
+        raise VerificationError("attestation event_log has no RTMR3 events")
+    return {**found, "rtmr3": _replay_rtmr(history)}
+
+
+def _event_digest(event: dict[str, Any]) -> str:
+    digest = event.get("digest")
+    if isinstance(digest, str):
+        return _require_hex(digest, None, "event digest")
+    payload = event.get("event_payload")
+    if isinstance(payload, str):
+        return sha384(payload.encode("utf-8")).hexdigest()
+    raise VerificationError("RTMR3 event missing digest or event_payload")
+
+
+def _event_value(event: dict[str, Any]) -> str | None:
+    payload = event.get("event_payload")
+    if isinstance(payload, str) and payload:
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            return payload
+        if isinstance(decoded, str):
+            return decoded
+        if isinstance(decoded, dict):
+            for key in ("digest", "value", "id", "hash"):
+                value = decoded.get(key)
+                if isinstance(value, str):
+                    return value
+    digest = event.get("digest")
+    return digest if isinstance(digest, str) and digest else None
+
+
+def _replay_rtmr(history: list[str]) -> str:
+    mr = b"\x00" * 48
+    for digest_hex in history:
+        digest = bytes.fromhex(digest_hex)
+        if len(digest) < 48:
+            digest = digest.ljust(48, b"\0")
+        mr = sha384(mr + digest).digest()
+    return mr.hex()
 
 
 def _require_hex(value: Any, byte_len: int | None, name: str) -> str:
@@ -269,6 +268,12 @@ def _require_hex(value: Any, byte_len: int | None, name: str) -> str:
     if not _is_hex(normalized) or (byte_len is not None and len(normalized) != byte_len * 2):
         raise VerificationError(f"malformed {name}")
     return normalized
+
+
+def _optional_hex(value: Any, byte_len: int, name: str) -> str | None:
+    if value is None:
+        return None
+    return _require_hex(value, byte_len, name)
 
 
 def _is_hex(value: str) -> bool:

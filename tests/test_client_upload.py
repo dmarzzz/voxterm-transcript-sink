@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha384
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from voxterm_sink_client.identity import load_or_create_author
 from voxterm_sink_client.transcript import build_transcript, parse_markdown
 from voxterm_sink_client.trust import TrustStore
 from voxterm_sink_client.upload import collect_markdown_paths, upload_files
-from voxterm_sink_client.verify import normalize_sink_url, verify_sink
+from voxterm_sink_client.verify import VerificationError, normalize_sink_url, verify_sink
 
 HIVEMIND = "11111111-1111-1111-1111-111111111111"
 
@@ -125,44 +126,68 @@ def test_directory_scan_is_sorted_and_nonrecursive_by_default(tmp_path):
 class FakeVerifier:
     def verify_attestation(self, bundle: dict[str, Any]) -> dict[str, Any]:
         nonce = bytes.fromhex(bundle["nonce"])
-        report = compute_report_data(bytes.fromhex(bundle["sink_sig_pubkey"]), None, nonce).hex()
+        dh_pub = bytes.fromhex(bundle["sink_dh_pubkey"]) if bundle["sink_dh_pubkey"] else None
+        report = compute_report_data(bytes.fromhex(bundle["sink_sig_pubkey"]), dh_pub, nonce).hex()
+        try:
+            rtmr3 = replayed_rtmr3(json.loads(bundle["event_log"]))
+        except json.JSONDecodeError:
+            rtmr3 = "00" * 48
         return {
-            "verified": True,
-            "reportdata": report,
-            "mrtd": "01" * 48,
-            "rtmr0": "02" * 48,
-            "rtmr1": "03" * 48,
-            "rtmr2": "04" * 48,
-            "rtmr3": "05" * 48,
-            "app_id": bundle["app_id"],
-            "compose_hash": bundle["compose_hash"],
-            "instance_id": bundle["instance_id"],
+            "success": True,
+            "quote": {
+                "verified": True,
+                "body": {
+                    "reportdata": "0x" + report,
+                    "mrtd": "0x" + "01" * 48,
+                    "rtmr0": "0x" + "02" * 48,
+                    "rtmr1": "0x" + "03" * 48,
+                    "rtmr2": "0x" + "04" * 48,
+                    "rtmr3": "0x" + rtmr3,
+                },
+            },
         }
 
 
 class FakeSinkTransport:
-    def __init__(self, identity: SinkIdentity | None = None, *, post_status: int = 201):
+    def __init__(
+        self,
+        identity: SinkIdentity | None = None,
+        *,
+        post_status: int = 201,
+        malformed_event_log: bool = False,
+        non_json_error: bool = False,
+        sink_dh_pubkey: str | None = None,
+    ):
         self.identity = identity or SinkIdentity.from_seed("client-test")
         self.provider = DevQuoteProvider("client-test")
         self.post_status = post_status
+        self.malformed_event_log = malformed_event_log
+        self.non_json_error = non_json_error
+        self.sink_dh_pubkey = sink_dh_pubkey
 
     def get(self, url: str, headers: dict[str, str] | None = None) -> HTTPResult:
         if "/v1/attestation?nonce=" in url:
             nonce = bytes.fromhex(url.rsplit("nonce=", 1)[1])
             body = self.provider.get_bundle(self.identity, nonce)
+            body["sink_dh_pubkey"] = self.sink_dh_pubkey
+            if self.malformed_event_log:
+                body["event_log"] = "not-json"
+            else:
+                body["event_log"] = make_event_log(
+                    body["compose_hash"], body["app_id"], body["instance_id"]
+                )
             body["produced_at"] = "2026-06-01T00:00:00Z"
             return self._signed_response(200, body)
         if url.endswith("/v1/info"):
+            att = self.provider.get_bundle(self.identity, b"\x00" * 32)
             body = {
                 "wire": WIRE,
                 "spec_version": "1.0.0-draft.1",
                 "sink_id": self.identity.sink_id,
                 "sink_sig_pubkey": self.identity.sig_pubkey_hex,
-                "sink_dh_pubkey": None,
-                "app_id": self.provider.get_bundle(self.identity, b"\x00" * 32)["app_id"],
-                "compose_hash": self.provider.get_bundle(self.identity, b"\x00" * 32)[
-                    "compose_hash"
-                ],
+                "sink_dh_pubkey": self.sink_dh_pubkey,
+                "app_id": att["app_id"],
+                "compose_hash": att["compose_hash"],
             }
             return self._signed_response(200, body)
         raise AssertionError(url)
@@ -173,6 +198,8 @@ class FakeSinkTransport:
         if self.post_status in (200, 201):
             body = {"id": payload["id"], "url": f"/v1/transcript/{payload['id']}", "stored_at": "2026-06-01T00:00:00Z"}
             return self._signed_response(self.post_status, body)
+        if self.non_json_error:
+            return HTTPResult(self.post_status, {}, b"not json")
         body = {"error": {"code": "bad_request", "message": "nope", "detail": {}}}
         return HTTPResult(self.post_status, {}, json.dumps(body).encode())
 
@@ -184,6 +211,36 @@ class FakeSinkTransport:
             {"X-Sink-Signature": self.identity.sign(digest)},
             raw,
         )
+
+
+def make_event_log(compose_hash: str, app_id: str, instance_id: str) -> str:
+    events = []
+    for name, value in (
+        ("compose-hash", compose_hash),
+        ("app-id", app_id),
+        ("instance-id", instance_id),
+    ):
+        events.append(
+            {
+                "imr": 3,
+                "event": name,
+                "event_payload": value,
+                "digest": sha384(value.encode("utf-8")).hexdigest(),
+            }
+        )
+    return json.dumps(events)
+
+
+def replayed_rtmr3(events: list[dict[str, Any]]) -> str:
+    mr = b"\x00" * 48
+    for event in events:
+        if event.get("imr") != 3:
+            continue
+        digest = bytes.fromhex(event["digest"])
+        if len(digest) < 48:
+            digest = digest.ljust(48, b"\0")
+        mr = sha384(mr + digest).digest()
+    return mr.hex()
 
 
 def test_verify_sink_tofu_first_and_repeated_accept(tmp_path):
@@ -218,6 +275,52 @@ def test_verify_sink_tofu_changed_key_rejected(tmp_path):
             verifier=FakeVerifier(),
             trust_store=trust,
         )
+
+
+def test_verify_sink_rejects_malformed_event_log(tmp_path):
+    with pytest.raises(VerificationError, match="event_log is malformed"):
+        verify_sink(
+            "https://sink.test",
+            transport=FakeSinkTransport(malformed_event_log=True),
+            verifier=FakeVerifier(),
+            trust_store=TrustStore(tmp_path / "trust.json"),
+        )
+
+
+class MisleadingVerifier:
+    def verify_attestation(self, bundle: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "success": True,
+            "metadata": {
+                "status": "success",
+                "verified": True,
+                "reportdata": "00" * 64,
+                "rtmr3": "00" * 48,
+            },
+        }
+
+
+def test_verify_sink_rejects_misleading_verifier_shape(tmp_path):
+    with pytest.raises(VerificationError, match="quote verifier did not mark quote verified"):
+        verify_sink(
+            "https://sink.test",
+            transport=FakeSinkTransport(),
+            verifier=MisleadingVerifier(),
+            trust_store=TrustStore(tmp_path / "trust.json"),
+        )
+
+
+def test_verify_sink_binds_non_null_dh_pubkey(tmp_path):
+    dh_pubkey = "09" * 32
+    sink_url, verified, _ = verify_sink(
+        "https://sink.test",
+        transport=FakeSinkTransport(sink_dh_pubkey=dh_pubkey),
+        verifier=FakeVerifier(),
+        trust_store=TrustStore(tmp_path / "trust.json"),
+    )
+
+    assert sink_url == "https://sink.test"
+    assert verified["sink_sig_pubkey"]
 
 
 def test_trust_reset_removes_last_url_and_sink(tmp_path):
@@ -256,3 +359,28 @@ def test_upload_success_and_response_signature_verification(tmp_path):
     assert failed == []
     assert uploaded[0].status == "created"
     assert uploaded[0].id
+
+
+def test_upload_non_json_error_preserves_http_context(tmp_path):
+    path = write_export(tmp_path / "2026-06-01_120000-transcript.md", "**[12:00:01]** hi\n")
+    trust = TrustStore(tmp_path / "trust.json")
+    transport = FakeSinkTransport(post_status=400, non_json_error=True)
+    sink_url, verified, info = verify_sink(
+        "https://sink.test", transport=transport, verifier=FakeVerifier(), trust_store=trust
+    )
+    author = load_or_create_author(tmp_path / "author.key")
+
+    uploaded, failed = upload_files(
+        [path],
+        sink_url=sink_url,
+        sink_info=info,
+        sink_pubkey=verified["sink_sig_pubkey"],
+        hivemind_id=HIVEMIND,
+        tags=[],
+        author=author,
+        dry_run=False,
+        transport=transport,
+    )
+
+    assert uploaded == []
+    assert failed[0].error == "HTTP 400: non-JSON response"
