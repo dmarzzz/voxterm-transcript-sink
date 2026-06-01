@@ -1,44 +1,93 @@
 # voxterm-transcript-sink
 
-An authenticated, always-on data sink for [VoxTerm](https://github.com/dmarzzz/VoxTerm) hivemind mode. It runs inside a TEE, so it can hold a group's full transcript history without ever being able to read it.
+An authenticated, always-on data sink for [VoxTerm](https://github.com/dmarzzz/VoxTerm)
+hivemind mode. It runs inside a TEE (Intel TDX, on Phala/dstack), so it can hold a
+group's full transcript history **without ever being able to read it**. You don't
+trust the operator — you verify the enclave.
 
-## what this is
+## Use it (client quickstart)
 
-VoxTerm hivemind mode is persistent, cross-location, async sharing of transcripts, notes, and readouts across a trusted group. Party mode (real-time, LAN-only, one room) feeds it. Hivemind is what the agents point at.
+You have VoxTerm Markdown transcript exports. Verify the enclave, then upload — your
+private author key never leaves your machine.
 
-The protocol is mesh gossip with no coordinator. Every member is sovereign over their own copy, holds a complete local replica of each hivemind they joined, and syncs opportunistically when peers are reachable. That model is correct, and it has one gap: it assumes someone is online. When every laptop in the group is closed, a peer who just joined, or who reconnects after a week away, has no one to backfill from.
+**Live instance:**
 
-This is the peer that never sleeps. It is not a coordinator and not an authority. It is one more node in the mesh that happens to stay online: it joins a hivemind, accepts gossiped entries, and serves request/reply backfill when a member comes back.
+```
+https://737d7cb9c5fbdff22d88408b3fdf3463a1d088b8-8723.dstack-pha-prod5.phala.network
+```
 
-## why a TEE
+```bash
+SINK=https://737d7cb9c5fbdff22d88408b3fdf3463a1d088b8-8723.dstack-pha-prod5.phala.network
 
-The hivemind scoping doc flags bootstrap relay operators as an explicit centralization tradeoff. An always-on node sees every entry that flows through the group, so normally you have to trust whoever runs the box.
+# 1. install the client (ships in the wheel as `voxterm-sink-upload`)
+pipx install ./voxterm-transcript-sink        # or: pip install ./voxterm-transcript-sink
 
-A TEE removes that trust instead of asking for it. The sink runs inside an enclave with remote attestation. It stays online, accepts entries, and serves backfill, but the operator cannot read private hivemind payloads and cannot forge or tamper with entries. You do not trust the operator. You verify the enclave.
+# 2. verify the sink is the genuine, pinned release BEFORE sending anything
+voxterm-sink-upload verify --sink-url "$SINK" \
+  --measurement-policy pinned --measurements ./measurements.json
 
-This is the answer to the relay-operator question that does not reintroduce a coordinator: a node that holds the data without holding the keys to it.
+# 3. upload transcripts into a hivemind
+voxterm-sink-upload upload ~/Documents/voxterm \
+  --sink-url "$SINK" --hivemind-id <uuid> --recursive
+```
 
-## authenticated, both directions
+- **Uploading needs no secret** — writes are attested-but-open in v1 (your client
+  verifies the enclave; the sink accepts the write). **Reading** transcripts back
+  needs the shared read secret, which the operator gives you out-of-band.
+- `--measurement-policy pinned` requires the live TDX quote to match the published
+  [`measurements.json`](measurements.json) and **fails closed** otherwise. Omit it to
+  fall back to trust-on-first-use (`tofu`).
+- `upload` re-verifies first, so a standalone `verify` is optional. Use `--dry-run`
+  to preview, `--json` for machine output.
 
-The v1 protocol is designed around two checks: clients authenticate the sink by verifying TEE attestation, and the sink can verify author signatures on submitted transcript objects.
+Full walkthrough: [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md).
 
-This repository currently contains a proof-of-concept sink, not the final membership system:
+## API
 
-- **Writers authenticate the sink.** Before a client pushes to a TEE sink, it verifies the enclave's remote attestation and binds responses to the attested `sink_sig` key.
-- **Author signatures are optional in v1.** If a chunk or transcript carries an ed25519 `signature`, the PoC verifies it against `author`. If it is absent, the PoC accepts the write, matching the v1 spec. Required signatures and registered author membership are roadmap work.
+Base URL `https://<app-id>-8723.<gateway-domain>/v1`. Every response is signed by the
+sink's attested `sink_sig` key (`X-Sink-Signature`). Machine-readable contract:
+[`openapi.yaml`](openapi.yaml); normative prose: [`specs/v1/voxterm-sink-protocol.md`](specs/v1/voxterm-sink-protocol.md).
 
-## what it stores
+| Method & path | Auth | Purpose |
+|---|---|---|
+| `GET /v1/health` | none | Liveness probe |
+| `GET /v1/info` | none | Capabilities, limits, `sink_sig_pubkey`, `compose_hash` |
+| `GET /v1/attestation?nonce=` | none | Fresh TDX quote bundle — how clients verify the enclave |
+| `POST /v1/auth` | read secret | Read-tier auth handshake (spec §8) |
+| `POST /v1/transcript` | attested write | Submit a finalized transcript |
+| `POST /v1/transcript/stream` | attested write | Submit a live NDJSON chunk stream |
+| `GET /v1/transcript` | read secret | List / read transcripts |
+| `GET /v1/transcript/{id}` | read secret | Read one transcript |
+| `GET /v1/transcript/{id}/chunks` | read secret | Read chunks / high-water |
 
-The PoC stores the v1 `Transcript` and `TranscriptChunk` envelopes as it receives them:
+## How verification works (why a TEE)
 
-- transcripts are content-addressed by BLAKE3 over JCS canonical bytes
-- chunks are retained by `(session_id, author, seq)`
-- optional author signatures are verified when present
-- payload encryption is represented by the `encryption` field but is not implemented by the sink itself
+An always-on relay sees every entry that flows through a group, so normally you'd
+have to trust whoever runs the box. A TEE removes that trust instead of asking for
+it: the sink runs in an enclave with remote attestation, so the operator **cannot
+read private payloads and cannot forge or tamper with entries**. A node that holds
+the data without holding the keys to it.
 
-In v1, confidentiality comes from the verified TEE boundary and sealed deployment storage, not from end-to-end encrypted payloads. End-to-end encryption, registered membership, tombstones, and full Hivemind mesh reconciliation are deferred roadmap items.
+Before a client sends anything it:
 
-## relationship to VoxTerm
+1. fetches a fresh TDX DCAP quote from `GET /v1/attestation` (with a nonce),
+2. verifies it against Intel collateral and replays the event log to confirm the
+   running code (RTMR3 → `compose_hash`),
+3. checks the quote's `report_data` binds the sink's `sink_sig` key (channel binding
+   + freshness), and
+4. under `pinned`, requires the measurements to match the published release.
+
+The build is reproducible (a clean rebuild reproduces the same image digest), so the
+pinned measurements trace back to public source — see
+[`docs/REPRODUCE.md`](docs/REPRODUCE.md).
+
+## Where it fits
+
+VoxTerm hivemind is mesh gossip with no coordinator: every member holds a complete
+local replica and syncs when peers are reachable. The gap: it assumes someone is
+online. This is the peer that never sleeps — not a coordinator, just one more node
+that stays online to accept gossiped entries and serve backfill to a member who
+returns.
 
 ```
  VoxTerm party-mode session ends
@@ -52,32 +101,27 @@ In v1, confidentiality comes from the verified TEE boundary and sealed deploymen
                           attested backfill to any returning member
 ```
 
-Sources are pluggable, hivemind is the destination, and this is one durable node on that destination. It does not replace any peer's local copy. It is the copy that is always reachable.
+It stores the v1 `Transcript` / `TranscriptChunk` envelopes as received: transcripts
+content-addressed by BLAKE3 over JCS canonical bytes, chunks keyed by
+`(session_id, author, seq)`, optional Ed25519 author signatures verified when present.
+In v1 confidentiality is the verified TEE boundary plus KMS-sealed storage, **not**
+end-to-end encryption — don't upload anything you wouldn't trust to a verified enclave.
 
-## the spec
+## Run your own / develop
 
-This repo is spec-first. Someone else ships the implementation against a frozen wire contract.
+- [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) — stand up a sink (dev → dstack
+  simulator → real TDX on Phala).
+- [`docs/HOSTING_AND_GUARANTEES.md`](docs/HOSTING_AND_GUARANTEES.md) — hosting model,
+  the v1 guarantees and non-guarantees, and the roadmap.
+- [`docs/PHALA_DEPLOY.md`](docs/PHALA_DEPLOY.md) — the live production deployment +
+  deploy runbook. [`docs/REPRODUCE.md`](docs/REPRODUCE.md) — reproducible build &
+  measurement pinning. [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — running the PoC
+  and the deliberate cuts.
 
-- [`specs/v1/voxterm-sink-protocol.md`](specs/v1/voxterm-sink-protocol.md) is the normative protocol, version `1.0.0-draft.1`, wire identifier `voxterm-sink/1`. It defines the attestation procedure ("verify it's a TEE"), the data model, the `/auth` and `/transcript` APIs, the cohort/coordinator auth lattice, and the roadmap.
-- [`openapi.yaml`](openapi.yaml) is the machine-readable API description. The prose spec wins on any divergence.
+## Status
 
-**New here?** Start with [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) to *use* a sink (download the CLI, point it at a URL, upload) or [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) to *run* one (dev → simulator → real TDX); [`docs/HOSTING_AND_GUARANTEES.md`](docs/HOSTING_AND_GUARANTEES.md) is the hosting model, the v1 guarantees and non-guarantees, and the roadmap.
-
-For the reference implementation: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) covers running the PoC, the dstack simulator, attestation modes, and the deliberate PoC cuts; [`docs/REPRODUCE.md`](docs/REPRODUCE.md) is the per-release reproducible-build and measurement-pinning procedure.
-
-Read it in that order. The short version of the v1 design:
-
-1. The sink runs in Dstack on Intel TDX. It derives a long-term `sink_sig` identity from its attested app identity and serves a TDX DCAP quote at `GET /v1/attestation`.
-2. A VoxTerm client adds the sink by URL, sends a fresh nonce, verifies the quote against Intel collateral, replays the event log to confirm the running code, checks the quote's `report_data` binds the sink's key (channel binding plus freshness), and only then pushes. Verification runs in one of two measurement policies (spec §6.3): `tofu` (default — trust the measurements on first contact, warn if they change) or `pinned` (`--measurement-policy pinned` — require the live quote to match the published `measurements.json` for a release, fail closed otherwise).
-3. Push is a live `POST /v1/transcript/stream` (NDJSON chunk stream) or a single `POST /v1/transcript` on finalize. Whether you stream live or post once is a client choice; the sink supports both.
-4. Read is `GET /v1/transcript`. v1 read auth is a labeled placeholder: a shared static secret defaulting to `1234`. It is not real auth and the spec says so. The real cohort/coordinator model is defined and deferred.
-
-The data model is additive-only and versioned, so v1 can evolve without breaking old clients or old data.
-
-## what is deferred
-
-Per the spec roadmap (§12): author-signed writes, real read auth replacing `1234`, coordinator enforcement, end-to-end payload encryption under a hivemind group key, tombstones, and the full Hivemind mesh bridge. v1 ships the attested always-on sink with the easy auth; the hard halves are flagged, not hidden.
-
-## status
-
-Draft. The spec is open for contribution (see §13 for the process). The Hivemind protocol it targets is itself still in scoping; see `docs/hivemind-scoping.md` in the VoxTerm repo for the entry model, membership rules, and open questions this sink fits into.
+Proof-of-concept against a frozen wire contract (`voxterm-sink/1`, spec
+`1.0.0-draft.1`). The data model is additive-only and versioned. **Deferred** (spec
+§12, flagged not hidden): author-signed writes and registered membership, real read
+auth replacing the shared secret, coordinator enforcement, end-to-end payload
+encryption, tombstones, and the full Hivemind mesh bridge.

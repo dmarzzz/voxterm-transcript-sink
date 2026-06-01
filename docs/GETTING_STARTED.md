@@ -34,12 +34,18 @@ along as the `author` field.
 
 ## 2. Verify the sink
 
-You need the sink's base URL from whoever runs it. On Phala/dstack it looks like
-`https://<app-id>-8723.<gateway-domain>`.
+The live production sink is at:
+
+```bash
+export SINK=https://737d7cb9c5fbdff22d88408b3fdf3463a1d088b8-8723.dstack-pha-prod5.phala.network
+```
+
+(For a different operator's sink, use their base URL instead — on Phala/dstack it
+looks like `https://<app-id>-8723.<gateway-domain>`.)
 
 ```bash
 # first contact — trust-on-first-use (the default policy)
-voxterm-sink-upload verify --sink-url https://<app-id>-8723.<gateway-domain>
+voxterm-sink-upload verify --sink-url "$SINK"
 ```
 
 This fetches a fresh TDX attestation quote, verifies it, replays the event log to
@@ -57,7 +63,7 @@ Two trust policies:
   published release manifest and **fails closed** otherwise:
 
   ```bash
-  voxterm-sink-upload verify --sink-url https://<app-id>-8723.<gateway-domain> \
+  voxterm-sink-upload verify --sink-url "$SINK" \
     --measurement-policy pinned --measurements ./measurements.json
   ```
 
@@ -73,7 +79,7 @@ directory of `*.md`) and the cohort/hivemind UUID you're uploading into:
 
 ```bash
 voxterm-sink-upload upload ~/Documents/voxterm \
-  --sink-url https://<app-id>-8723.<gateway-domain> \
+  --sink-url "$SINK" \
   --hivemind-id <UUID> \
   --recursive \
   --tag meeting
