@@ -157,6 +157,7 @@ class FakeSinkTransport:
         malformed_event_log: bool = False,
         non_json_error: bool = False,
         sink_dh_pubkey: str | None = None,
+        tamper_event_payload: bool = False,
     ):
         self.identity = identity or SinkIdentity.from_seed("client-test")
         self.provider = DevQuoteProvider("client-test")
@@ -164,6 +165,7 @@ class FakeSinkTransport:
         self.malformed_event_log = malformed_event_log
         self.non_json_error = non_json_error
         self.sink_dh_pubkey = sink_dh_pubkey
+        self.tamper_event_payload = tamper_event_payload
 
     def get(self, url: str, headers: dict[str, str] | None = None) -> HTTPResult:
         if "/v1/attestation?nonce=" in url:
@@ -174,7 +176,10 @@ class FakeSinkTransport:
                 body["event_log"] = "not-json"
             else:
                 body["event_log"] = make_event_log(
-                    body["compose_hash"], body["app_id"], body["instance_id"]
+                    body["compose_hash"],
+                    body["app_id"],
+                    body["instance_id"],
+                    tamper_payload=self.tamper_event_payload,
                 )
             body["produced_at"] = "2026-06-01T00:00:00Z"
             return self._signed_response(200, body)
@@ -213,7 +218,13 @@ class FakeSinkTransport:
         )
 
 
-def make_event_log(compose_hash: str, app_id: str, instance_id: str) -> str:
+def make_event_log(
+    compose_hash: str,
+    app_id: str,
+    instance_id: str,
+    *,
+    tamper_payload: bool = False,
+) -> str:
     events = []
     for name, value in (
         ("compose-hash", compose_hash),
@@ -222,19 +233,21 @@ def make_event_log(compose_hash: str, app_id: str, instance_id: str) -> str:
     ):
         events.append(
             {
-                "imr": 3,
+                "imr": "3",
                 "event": name,
                 "event_payload": value,
                 "digest": sha384(value.encode("utf-8")).hexdigest(),
             }
         )
+    if tamper_payload:
+        events[0]["event_payload"] = "tampered-compose-hash"
     return json.dumps(events)
 
 
 def replayed_rtmr3(events: list[dict[str, Any]]) -> str:
     mr = b"\x00" * 48
     for event in events:
-        if event.get("imr") != 3:
+        if str(event.get("imr")) != "3":
             continue
         digest = bytes.fromhex(event["digest"])
         if len(digest) < 48:
@@ -282,6 +295,16 @@ def test_verify_sink_rejects_malformed_event_log(tmp_path):
         verify_sink(
             "https://sink.test",
             transport=FakeSinkTransport(malformed_event_log=True),
+            verifier=FakeVerifier(),
+            trust_store=TrustStore(tmp_path / "trust.json"),
+        )
+
+
+def test_verify_sink_rejects_event_payload_digest_mismatch(tmp_path):
+    with pytest.raises(VerificationError, match="digest does not match event_payload"):
+        verify_sink(
+            "https://sink.test",
+            transport=FakeSinkTransport(tamper_event_payload=True),
             verifier=FakeVerifier(),
             trust_store=TrustStore(tmp_path / "trust.json"),
         )

@@ -206,7 +206,7 @@ def _replay_event_log(bundle: dict[str, Any]) -> dict[str, str]:
         if not isinstance(event, dict):
             continue
         imr = event.get("imr", event.get("rtmr"))
-        if imr != 3:
+        if str(imr) != "3":
             continue
         digest = _event_digest(event)
         history.append(digest)
@@ -225,9 +225,14 @@ def _replay_event_log(bundle: dict[str, Any]) -> dict[str, str]:
 
 def _event_digest(event: dict[str, Any]) -> str:
     digest = event.get("digest")
-    if isinstance(digest, str):
-        return _require_hex(digest, None, "event digest")
     payload = event.get("event_payload")
+    if isinstance(digest, str):
+        normalized = _require_hex(digest, None, "event digest")
+        if isinstance(payload, str):
+            expected = sha384(payload.encode("utf-8")).hexdigest()
+            if normalized != expected:
+                raise VerificationError("RTMR3 event digest does not match event_payload")
+        return normalized
     if isinstance(payload, str):
         return sha384(payload.encode("utf-8")).hexdigest()
     raise VerificationError("RTMR3 event missing digest or event_payload")
