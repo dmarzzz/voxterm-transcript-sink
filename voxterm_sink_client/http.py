@@ -6,6 +6,13 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from . import SPEC_VERSION, TOOL_NAME
+
+# Always send an explicit User-Agent. The Phala attestation-verify API sits behind
+# a WAF that 403s the default `Python-urllib/<ver>` agent, which would otherwise
+# break every verification. Callers can still override via the headers argument.
+USER_AGENT = f"{TOOL_NAME}/{SPEC_VERSION}"
+
 
 @dataclass
 class HTTPResult:
@@ -32,7 +39,9 @@ class HTTPTransport:
     def _request(
         self, method: str, url: str, body: bytes | None = None, headers: dict[str, str] | None = None
     ) -> HTTPResult:
-        req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
+        merged = {"User-Agent": USER_AGENT}
+        merged.update(headers or {})
+        req = urllib.request.Request(url, data=body, headers=merged, method=method)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return HTTPResult(

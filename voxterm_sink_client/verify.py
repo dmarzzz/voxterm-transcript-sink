@@ -243,17 +243,34 @@ def _replay_event_log(bundle: dict[str, Any]) -> dict[str, str]:
     return {**found, "rtmr3": _replay_rtmr(history)}
 
 
+# dstack tags every runtime (RTMR3) event with this type; its per-event digest is
+# sha384(event_type_LE32 || ":" || event_name || ":" || raw_payload). Real dstack
+# event logs ship these app events with an EMPTY `digest` field, so the verifier
+# must recompute it (the bundled dstack SDK's replay_rtmrs() does not, which is why
+# the server logs its own replay sanity-check as non-fatal).
+DSTACK_RUNTIME_EVENT_TYPE = 0x08000001
+
+
 def _event_digest(event: dict[str, Any]) -> str:
     digest = event.get("digest")
     payload = event.get("event_payload")
-    if isinstance(digest, str):
+    if isinstance(digest, str) and digest:
         normalized = _require_hex(digest, 48, "event digest")
-        if isinstance(payload, str):
+        if isinstance(payload, str) and payload:
             if normalized not in _payload_digest_candidates(payload):
                 raise VerificationError("RTMR3 event digest does not match event_payload")
         return normalized
+    # Empty/absent digest ⇒ a real dstack runtime event; recompute it.
     if isinstance(payload, str):
-        return _payload_digest_candidates(payload)[0]
+        try:
+            raw = bytes.fromhex(payload)
+        except ValueError:
+            raise VerificationError("RTMR3 event_payload is not valid hex") from None
+        event_type = event.get("event_type", DSTACK_RUNTIME_EVENT_TYPE)
+        if not isinstance(event_type, int):
+            event_type = DSTACK_RUNTIME_EVENT_TYPE
+        name = str(event.get("event", "")).encode("utf-8")
+        return sha384(event_type.to_bytes(4, "little") + b":" + name + b":" + raw).hexdigest()
     raise VerificationError("RTMR3 event missing digest or event_payload")
 
 
