@@ -582,10 +582,38 @@ def test_verify_sink_pinned_requires_release(tmp_path):
 
 
 def test_release_measurements_rejects_placeholder_template():
-    repo_root = Path(__file__).resolve().parent.parent
-    template = json.loads((repo_root / "measurements.json").read_text(encoding="utf-8"))
+    placeholder = {
+        "release": "voxterm-data-sink v0.1.0 (PoC — UNRELEASED, placeholders)",
+        "compose_hash": "<FILL: sha256 of the app-compose.json>",
+        "dstack_base_images": [
+            {"name": "<FILL>", "mrtd": "<FILL>", "rtmr0": "<FILL>", "rtmr1": "<FILL>", "rtmr2": "<FILL>"}
+        ],
+    }
     with pytest.raises(MeasurementError):
-        ReleaseMeasurements.from_dict(template)
+        ReleaseMeasurements.from_dict(placeholder)
+
+
+def test_event_digest_matches_dstack_runtime_format():
+    # Real dstack RTMR3 app events carry an empty digest; the verifier must
+    # recompute sha384(event_type_LE || ":" || name || ":" || raw_payload).
+    from voxterm_sink_client.verify import DSTACK_RUNTIME_EVENT_TYPE, _event_digest
+
+    payload_hex = "662149658669832903974c36425ec597dcc9d40e374820e97218048fda99b6c8"
+    event = {
+        "imr": 3,
+        "event_type": DSTACK_RUNTIME_EVENT_TYPE,
+        "digest": "",
+        "event": "compose-hash",
+        "event_payload": payload_hex,
+    }
+    expected = sha384(
+        DSTACK_RUNTIME_EVENT_TYPE.to_bytes(4, "little")
+        + b":"
+        + b"compose-hash"
+        + b":"
+        + bytes.fromhex(payload_hex)
+    ).hexdigest()
+    assert _event_digest(event) == expected
 
 
 def test_release_measurements_check_round_trip():

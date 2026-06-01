@@ -4,11 +4,13 @@ Pinned measurement policy (spec §6.3, §11.9) is only as strong as the ability 
 reproduce `compose_hash` and the base-image measurements. This file is the
 per-release procedure that produces `measurements.json`.
 
-> Status: the build is digest-pinned and hash-locked (steps 1–3 are baked into
-> the repo). The `compose_hash` + `mrtd`/`rtmr0..2` values in `measurements.json`
-> are still placeholders until read back from the live production deployment
-> (steps 5–6) — they are not derivable on a non-TDX host. Do not pin against
-> placeholder measurements.
+> Status: done for v0.1.0. The build is digest-pinned, hash-locked, and
+> deterministic (steps 1–3), and `measurements.json` is filled from the live
+> `voxterm-transcript-sink-prod` quote (steps 4–6) — pinned verification against
+> it is confirmed working. The steps below are the per-release procedure to
+> repeat on any future image/compose change (the live `compose_hash` +
+> `mrtd`/`rtmr0..2` are not derivable on a non-TDX host, so they must be re-read
+> from a live deployment each release).
 
 ## 1. Base image is digest-pinned (done)
 

@@ -1,4 +1,4 @@
-name = "voxterm-transcript-sink-staging"
+name = "voxterm-transcript-sink-prod"
 compose_file = "docker-compose.phala.yaml"
 public_logs = false
 public_sysinfo = false

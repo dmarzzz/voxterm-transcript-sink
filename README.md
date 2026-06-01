@@ -61,6 +61,8 @@ This repo is spec-first. Someone else ships the implementation against a frozen 
 - [`specs/v1/voxterm-sink-protocol.md`](specs/v1/voxterm-sink-protocol.md) is the normative protocol, version `1.0.0-draft.1`, wire identifier `voxterm-sink/1`. It defines the attestation procedure ("verify it's a TEE"), the data model, the `/auth` and `/transcript` APIs, the cohort/coordinator auth lattice, and the roadmap.
 - [`openapi.yaml`](openapi.yaml) is the machine-readable API description. The prose spec wins on any divergence.
 
+**New here?** Start with [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) to *use* a sink (download the CLI, point it at a URL, upload) or [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) to *run* one (dev → simulator → real TDX); [`docs/HOSTING_AND_GUARANTEES.md`](docs/HOSTING_AND_GUARANTEES.md) is the hosting model, the v1 guarantees and non-guarantees, and the roadmap.
+
 For the reference implementation: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) covers running the PoC, the dstack simulator, attestation modes, and the deliberate PoC cuts; [`docs/REPRODUCE.md`](docs/REPRODUCE.md) is the per-release reproducible-build and measurement-pinning procedure.
 
 Read it in that order. The short version of the v1 design:

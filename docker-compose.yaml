@@ -10,7 +10,7 @@ services:
   voxterm-data-sink:
     # For reproducible deployment, reference an immutable digest rather than a
     # mutable tag (spec §6.3). Build + push, then set SINK_IMAGE to the digest:
-    #   SINK_IMAGE=ghcr.io/<org>/voxterm-data-sink@sha256:<digest> docker compose up
+    #   SINK_IMAGE=sh1sh1nk/voxterm-data-sink@sha256:<digest> docker compose up
     # `build: .` is for local iteration only — pin the digest for any pinned cohort.
     image: ${SINK_IMAGE:-voxterm-data-sink:0.1.0}
     build: .

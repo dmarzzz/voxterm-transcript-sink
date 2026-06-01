@@ -3,94 +3,89 @@
 This deploys only `voxterm-data-sink`, the always-on TEE transcript sink. The
 local VoxTerm recorder/TUI is not part of this cloud deployment.
 
-Strategy: **promote the existing staging app in place.** We upgrade the *same*
-Phala app (same app-id) to a reproducibly-built, digest-pinned production image.
-Keeping the app-id preserves the `get_key`-derived `sink_sig` identity and the
-encrypted `/data` volume across the upgrade. The `compose_hash` (RTMR3) changes
-by design — that new value is what production clients pin (spec §6.3).
+## Live production deployment (as built)
 
-> The image is already built, pushed, and pinned
-> (`sh1sh1nk/voxterm-data-sink@sha256:b9f5c72b…`, see `REPRODUCE.md`). These steps
-> need your Phala credentials, so run them yourself.
+| | |
+|---|---|
+| App name | `voxterm-transcript-sink-prod` |
+| App ID | `737d7cb9c5fbdff22d88408b3fdf3463a1d088b8` |
+| Base URL | `https://737d7cb9c5fbdff22d88408b3fdf3463a1d088b8-8723.dstack-pha-prod5.phala.network` |
+| Image | `sh1sh1nk/voxterm-data-sink@sha256:836bb5f2…` (reproducible, see `REPRODUCE.md`) |
+| Base image | `dstack-0.5.9` |
+| Measurements | published in `measurements.json` (pinning works — verified live) |
 
-## 1. Validate locally
-
-```bash
-cd /home/ubuntu/voice/voxterm-transcript-sink
-uv run pytest -q                                  # 53 passing
-docker compose -f docker-compose.phala.yaml config   # needs VOXTERM_SINK_READ_SECRET set
-```
-
-## 2. Generate a fresh production read secret
-
-Do **not** reuse the staging secret or the `1234` default (spec §8.3). Keep this
-value somewhere safe — read clients need it.
+Pinned verification against the live sink:
 
 ```bash
-VOXTERM_SINK_READ_SECRET="$(openssl rand -hex 32)"
-```
-
-## 3. Upgrade the existing app in place
-
-Find the app/CVM, then upgrade it to the pinned compose with the new secret.
-(Confirm exact subcommands with `phala --help`; the CLI evolves.)
-
-```bash
-phala login
-phala cvms list                       # note the app-id for voxterm-transcript-sink-staging
-
-phala cvms upgrade <app-id> \
-  -c docker-compose.phala.yaml \
-  -e "VOXTERM_SINK_READ_SECRET=$VOXTERM_SINK_READ_SECRET"
-```
-
-Upgrading the existing app id (rather than `phala deploy` with a new name)
-preserves identity + volume. `phala.toml` keeps the historical
-`voxterm-transcript-sink-staging` name on purpose — renaming it would provision a
-*new* app and reset the identity/volume.
-
-## 4. Smoke test
-
-```bash
-BASE_URL="https://<app-id>-8723.<gateway-domain>"
-
-curl -fsS "$BASE_URL/v1/health"
-curl -fsS "$BASE_URL/v1/info"
-curl -fsS "$BASE_URL/v1/attestation?nonce=$(openssl rand -hex 32)"
-```
-
-A `503` on `/v1/attestation` means the service cannot reach the dstack guest
-agent or is not in the expected CVM environment.
-
-## 5. Freeze the production measurements
-
-The new app produces a new `compose_hash`. Read the real values from the live
-quote and pin them (this is `REPRODUCE.md` steps 5–6):
-
-```bash
-voxterm-sink-upload verify --sink-url "$BASE_URL"   # TOFU records the measurements
-voxterm-sink-upload trust inspect                   # prints compose_hash + mrtd/rtmr0..2
-```
-
-Fill `measurements.json` (repo root) with those values + the dstack base-image
-name and commit; publish it for clients. Production clients then verify against
-it with:
-
-```bash
-voxterm-sink-upload verify --sink-url "$BASE_URL" \
+voxterm-sink-upload verify \
+  --sink-url https://737d7cb9c5fbdff22d88408b3fdf3463a1d088b8-8723.dstack-pha-prod5.phala.network \
   --measurement-policy pinned --measurements ./measurements.json
 ```
 
-(Don't bundle `measurements.json` into `voxterm_sink_client/` — it would be
-circular with the image digest; see `REPRODUCE.md` §6.)
+`voxterm-transcript-sink-prod` is the only deployed app (an earlier staging CVM
+was retired). Stand up a separate staging app only if you need a test bed.
 
-## 6. Migrate existing TOFU testers
+## Reproducing / re-deploying this (needs Phala credentials)
 
-Anyone who verified the old staging app under TOFU has its old measurements in
-their local trust store; the new `compose_hash` will (correctly) make
-re-verification fail. They reset and re-verify:
+### 1. Validate locally
 
 ```bash
-voxterm-sink-upload trust reset --sink-url "$BASE_URL"
-voxterm-sink-upload verify --sink-url "$BASE_URL" --measurement-policy pinned
+uv run pytest -q                                     # 54 passing
+VOXTERM_SINK_READ_SECRET=x docker compose -f docker-compose.phala.yaml config >/dev/null
 ```
+
+### 2. Fresh production read secret
+
+Never reuse a prior secret or the `1234` default (spec §8.3). Keep it safe — read
+clients need it. Pass it via an env file (avoids leaking it in `ps`):
+
+```bash
+umask 077
+printf 'VOXTERM_SINK_READ_SECRET=%s\n' "$(openssl rand -hex 32)" > prod.env
+```
+
+### 3. Deploy
+
+`phala deploy` resolves the target CVM by the `name` in `phala.toml`. With
+`name = "voxterm-transcript-sink-prod"` it **updates** that app once it exists.
+To create it the first time, the name must not match any existing CVM — move
+`phala.toml` aside and pass `-n` explicitly:
+
+```bash
+phala login
+mv phala.toml /tmp/phala.toml.bak          # only needed for the very first create
+phala deploy \
+  -n voxterm-transcript-sink-prod \
+  -c docker-compose.phala.yaml \
+  -e prod.env -t tdx.small --kms phala \
+  --no-public-logs --no-public-sysinfo --no-listed --wait
+mv /tmp/phala.toml.bak phala.toml
+rm -f prod.env
+```
+
+(`phala cvms upgrade <app-id>` upgrades an existing app in place instead, keeping
+its identity + `/data` volume — used if you ever want to promote a CVM rather
+than stand up a new one.)
+
+### 4. Smoke test
+
+```bash
+BASE_URL="https://<app-id>-8723.<gateway-domain>"   # gateway base_domain via `phala cvms get <app-id> --json`
+curl -fsS "$BASE_URL/v1/health"
+curl -fsS "$BASE_URL/v1/info"
+curl -fsS "$BASE_URL/v1/attestation?nonce=$(openssl rand -hex 32)"   # 503 ⇒ can't reach guest agent
+```
+
+### 5. Freeze measurements (only when releasing a NEW build/app)
+
+A new app/compose yields a new `compose_hash`. Read the real values from the live
+quote and pin them (`REPRODUCE.md` §5–6):
+
+```bash
+voxterm-sink-upload verify --sink-url "$BASE_URL"   # TOFU records measurements
+voxterm-sink-upload trust inspect                   # compose_hash + mrtd/rtmr0..2
+```
+
+Fill `measurements.json` (repo root) + the dstack base-image name and commit;
+publish it for clients. Keep it at the repo root, **not** bundled into
+`voxterm_sink_client/` (circular with the image digest — see `REPRODUCE.md` §6).

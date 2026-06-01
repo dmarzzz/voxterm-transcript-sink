@@ -9,7 +9,7 @@ pluggable attestation.
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                     # 21 hermetic tests
+pytest -q                     # 54 hermetic tests
 ```
 
 ## Running
@@ -95,12 +95,16 @@ to a non-attested key. Use `VOXTERM_SINK_ATTEST=dev` or the simulator off-TD.
 
 ### Reproducible builds & measurement pinning
 
-Pinning (spec §6.3) requires a reproducible build. See **REPRODUCE.md** for the
-release procedure: digest-pin the base image, install from `requirements.lock`,
-publish an immutable image digest, and fill `measurements.json` (spec Appendix
-B) with the real `compose_hash` + `MRTD/RTMR0..2`. Those measurement values can
-only be produced by an actual dstack/TDX build — `measurements.json` ships with
-**placeholders** until then.
+Pinning (spec §6.3) requires a reproducible build, and the build now is one: the
+base image is digest-pinned, deps install from a hash-locked `requirements.lock`
+under `--require-hashes`, and the image is built deterministically
+(`SOURCE_DATE_EPOCH` into the build env, `pip --no-compile`, `PIP_NO_CACHE_DIR=1`,
+buildx `rewrite-timestamp`) so a clean rebuild from a commit reproduces the same
+digest. See **REPRODUCE.md** for the exact command. The released image digest is
+pinned in `docker-compose.phala.yaml`. The *live* half of `measurements.json`
+(spec Appendix B) — `compose_hash` + `MRTD/RTMR0..2` — has been read back from the
+live `voxterm-transcript-sink-prod` deployment and is published; re-pin from the
+live quote whenever the image or compose changes.
 
 ## Known limitations (PoC)
 
@@ -124,12 +128,10 @@ These are deliberate cuts; each is a spec feature deferred for the PoC:
   (spec §12).
 - **Field validation**: models enforce hex (`author`/`id`), UUID (`hivemind_id`),
   `session_id` shape (`YYYY-MM-DD_HHMMSS`, matching VoxTerm `tui/app.py`),
-  RFC3339 timestamps, `confidence∈[0,1]`, and size caps — but not every spec
-  invariant (e.g. cross-field timing monotonicity). Unknown fields are preserved
-  (additive-only, §9).
-- **Timestamps are lenient on timezone**: the RFC3339 validator accepts any
-  explicit offset, not strictly `Z`. The spec (§1) says timestamps are always
-  UTC `Z`; enforcing exact-`Z` is deferred (fine for MVP).
+  RFC3339 timestamps with an explicit UTC offset (`Z`/`+00:00` only — non-UTC
+  offsets and naive timestamps are rejected, spec §1), `confidence∈[0,1]`, and
+  size caps — but not every spec invariant (e.g. cross-field timing
+  monotonicity). Unknown fields are preserved (additive-only, §9).
 
 ### Implementation notes (intentional, not bugs)
 

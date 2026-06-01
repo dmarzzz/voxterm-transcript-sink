@@ -1,21 +1,21 @@
 {
-  "_comment": "TEMPLATE (spec Appendix B). The PLACEHOLDER values below MUST be replaced with real values produced by an actual dstack/TDX build at release time — see REPRODUCE.md. A pinned client (spec §6.3) checks MRTD/RTMR0..2 against an entry in dstack_base_images and the RTMR3 compose-hash against compose_hash. Do NOT ship this file with placeholders to a pinned cohort.",
-  "release": "voxterm-data-sink v0.1.0 (PoC — UNRELEASED, placeholders)",
+  "_comment": "Release manifest (spec Appendix B) for the voxterm-data-sink PRODUCTION deployment. A pinned client (spec §6.3, voxterm-sink-upload --measurement-policy pinned) checks the live quote's MRTD/RTMR0..2 against a dstack_base_images entry and the RTMR3 compose-hash against compose_hash. Values below were read back from the live prod quote (app_id 737d7cb9c5fbdff22d88408b3fdf3463a1d088b8) and the report_data binding to the sink_sig key was verified. Re-pin on any image/compose change.",
+  "release": "voxterm-data-sink v0.1.0",
   "wire": "voxterm-sink/1",
-  "compose_hash": "<FILL: sha256 of the app-compose.json wrapping docker-compose.yaml>",
+  "compose_hash": "662149658669832903974c36425ec597dcc9d40e374820e97218048fda99b6c8",
   "image": "docker.io/sh1sh1nk/voxterm-data-sink@sha256:836bb5f28ffc85b572d096a7b6511353f24a567caea2d3c9d6e6efb43589742d",
   "dstack_base_images": [
     {
-      "name": "<FILL: dstack base image, e.g. dstack-0.x.y>",
-      "mrtd": "<FILL: hex sha384>",
-      "rtmr0": "<FILL: hex sha384>",
-      "rtmr1": "<FILL: hex sha384>",
-      "rtmr2": "<FILL: hex sha384>"
+      "name": "dstack-0.5.9 (os_image_hash bd369a8c2f9edb2b52dad48ac8e0b32dde5f1337c423a506b48d07403a7d8033)",
+      "mrtd": "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077",
+      "rtmr0": "68102e7b524af310f7b7d426ce75481e36c40f5d513a9009c046e9d37e31551f0134d954b496a3357fd61d03f07ffe96",
+      "rtmr1": "07e6f51aa763abfe75c3ddfbf4f425fe3f0ceff66d807a75e049303dce9addf68e7218729bd419638af63a370f65878c",
+      "rtmr2": "df67e467e60edc1737bcf8e682d48131bfb427f523226aa7f197a7608e9b3784783fa759ef5b28191fa12f9ddb36b858"
     }
   ],
-  "reproducible_build": "https://github.com/dmarzzz/voxterm-transcript-sink/blob/main/REPRODUCE.md",
+  "reproducible_build": "https://github.com/dmarzzz/voxterm-transcript-sink/blob/main/docs/REPRODUCE.md",
   "kms": {
-    "root_pubkey": "<FILL or null>",
-    "allowed_compose_hashes": ["<FILL: compose_hash>"]
+    "root_pubkey": null,
+    "allowed_compose_hashes": []
   }
 }
